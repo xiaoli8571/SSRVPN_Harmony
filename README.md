@@ -1,7 +1,7 @@
 # SSRVPN for HarmonyOS（鸿蒙 NEXT）
 
 将 [SSRVPN](https://github.com/Elegying/SSRVPN)（Android 上的 Clash/Mihomo 客户端）完整移植到
-**HarmonyOS NEXT（纯鸿蒙 ArkTS）**。UI 用 ArkTS/ArkUI 1:1 还原原项目，内核用交叉编译的
+**HarmonyOS NEXT（纯鸿蒙 ArkTS）**。
 **Mihomo（Clash Meta）**以 `c-shared` 库形式进程内嵌入，通过 `VpnExtensionAbility` + TUN
 （gVisor 用户态协议栈）实现全局代理。
 
