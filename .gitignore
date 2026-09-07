@@ -1,0 +1,39 @@
+# ---- DevEco / OpenHarmony build outputs ----
+build/
+.hvigor/
+.cxx/
+.preview/
+oh_modules/
+entry/oh_modules/
+**/oh_modules/
+entry/build/
+**/build/
+*.hap
+*.hap.gz
+*.app
+*.log
+*.json.gz
+oh-package-lock.json5
+
+# ---- IDE ----
+.idea/
+.vscode/
+*.iml
+
+# ---- signing materials (NEVER commit) ----
+*.p12
+*.keystore
+*.jks
+*.cer
+*.p7b
+
+# ---- OS junk ----
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ---- core build logs ----
+ssrvpn_go_build_*.log
+
+# keep prebuilt core library (enables clone-and-build without the Go toolchain)
+!entry/libs/**

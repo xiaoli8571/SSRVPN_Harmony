@@ -1,0 +1,14 @@
+{
+  "modelVersion": "5.0.0",
+  "dependencies": {},
+  "execution": {
+    "analyze": "normal",
+    "daemon": false,
+    "incremental": true,
+    "parallel": false,
+    "typeCheck": false
+  },
+  "logging": {},
+  "debugging": {},
+  "nodeOptions": {}
+}

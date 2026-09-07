@@ -1,0 +1,12 @@
+{
+  "string": [
+    { "name": "app_name", "value": "SSRVPN" },
+    { "name": "module_desc", "value": "SSRVPN HarmonyOS main module" },
+    { "name": "ability_desc", "value": "SSRVPN main UI" },
+    { "name": "vpn_desc", "value": "SSRVPN VPN service" },
+    { "name": "form_desc", "value": "SSRVPN quick toggle card" },
+    { "name": "vpn_permission_reason", "value": "SSRVPN needs to establish a VPN tunnel to provide proxying" },
+    { "name": "bg_task_reason", "value": "Keep the VPN connection stable in background" },
+    { "name": "notification_reason", "value": "Show VPN connection state and traffic speed" }
+  ]
+}
