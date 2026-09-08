@@ -32,20 +32,6 @@
 - GeoIP 分流：`geoip.metadb` 后台下载，缺失时自动降级跳过 `GEOIP` 规则避免启动失败
 - 规则：强制代理 / 强制直连站点、`DOMAIN-SUFFIX,cn`、GEOIP 兜底 `MATCH,PROXY`
 
-## 关于包体积（HAP ≈ 50MB）
-
-`entry/libs/arm64-v8a/libgojni.so` ≈ 48MB 占绝对大头，且已 `strip`（无调试段/符号表）、
-在 HAP 中未压缩存储（HarmonyOS 加载器要求 `.so` 不压缩以便 mmap 直读）。体积主要来自：
-
-1. **gVisor 用户态 TCP/IP 协议栈**（最大项）：鸿蒙沙箱无 `iptables`/内核 TUN offload，
-   只能用 gVisor 在用户态跑完整网络栈 —— 这是与 Android 原版（用内核 TUN + system stack）
-   最大的差异，Android 因此不需要 gVisor。
-2. 全量代理协议（VLESS/Reality/Hysteria2/TUIC/Sing-Box 兼容层等）与 TLS 栈。
-3. Go 运行期元数据（gopclntab / reflect，约 20MB `.data.rel.ro`）。
-
-可裁剪方向（按需）：`-tags no_tailscale` 去掉 tailscale 依赖树（约省 3–6MB）；进一步需
-源码级移除未用协议。当前版本为功能完整优先，未做激进裁剪。
-
 ## 仓库结构
 
 ```
