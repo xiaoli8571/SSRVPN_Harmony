@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"syscall"
 	"testing"
 	"time"
 
@@ -27,57 +28,12 @@ func (fixedRawConn) Write(func(uintptr) bool) error {
 	return errors.New("unexpected RawConn.Write")
 }
 
-func TestProtectSessionCancelUnblocksPendingRequest(t *testing.T) {
-	session := newProtectSession()
-	result := make(chan bool, 1)
-	go func() {
-		_, err := session.wait(time.Second)
-		result <- err == nil
-	}()
-
-	session.cancel()
-	select {
-	case active := <-result:
-		if active {
-			t.Fatal("canceled protect request was reported as active")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("canceled protect request remained blocked")
-	}
-}
-
-func TestProtectSessionDeliversResult(t *testing.T) {
-	session := newProtectSession()
-	result := make(chan bool, 1)
-	go func() {
-		ok, err := session.wait(time.Second)
-		result <- ok && err == nil
-	}()
-
-	if !session.report(true) {
-		t.Fatal("active protect session rejected a result")
-	}
-	select {
-	case ok := <-result:
-		if !ok {
-			t.Fatal("protect result was not delivered")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("protect result remained blocked")
-	}
-}
-
-func TestStableProtectDispatcherFailsClosedWithoutSession(t *testing.T) {
+func TestProtectSocketFailsOpenWithoutSession(t *testing.T) {
 	replaceProtectSession(nil)
-	if err := protectSocket("tcp", "example.com:443", nil); err == nil {
-		t.Fatal("protect dispatcher allowed a socket without an active monitor")
-	}
-}
-
-func TestProtectSessionWaitTimesOut(t *testing.T) {
-	session := newProtectSession()
-	if _, err := session.wait(10 * time.Millisecond); err != errProtectTimedOut {
-		t.Fatalf("wait error = %v, want %v", err, errProtectTimedOut)
+	// 新语义: protect 通知只是兜底提示(进程级 protectProcessNet 才是主保障),
+	// 没有会话时也必须放行拨号, 绝不能让 dial 失败。
+	if err := protectSocket("tcp", "example.com:443", nil); err != nil {
+		t.Fatalf("protect dispatcher blocked a socket without a monitor: %v", err)
 	}
 }
 
@@ -154,7 +110,9 @@ func TestInstallProtectSessionRejectsPendingStop(t *testing.T) {
 	}
 }
 
-func TestProtectTimeoutRetiresSessionAndClosesMonitorPipe(t *testing.T) {
+// TestProtectSocketWaitsForAckAndFailsOpenGrace 验证 v3 语义:
+// 无回执时等待上限≈protectWaitTimeout 后放行(fail-open), 有按 fd 回执时快速放行。
+func TestProtectSocketWaitsForAckAndFailsOpenGrace(t *testing.T) {
 	readPipe, writePipe, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("create protect pipe: %v", err)
@@ -167,62 +125,88 @@ func TestProtectTimeoutRetiresSessionAndClosesMonitorPipe(t *testing.T) {
 
 	session := newProtectSession()
 	session.writer = writePipe
+	writeFd := int(writePipe.Fd())
+	if err := syscall.SetNonblock(writeFd, true); err != nil {
+		t.Fatalf("set nonblock: %v", err)
+	}
+	session.writerFd = writeFd
 	if !installProtectSession(session) {
 		t.Fatal("protect session was unexpectedly rejected")
 	}
 
-	protectReturned := make(chan error, 1)
-	go func() {
-		protectReturned <- protectSocket("tcp", "example.com:443", fixedRawConn(42))
-	}()
-
-	var encoded [4]byte
+	// 1) 无读者: 单次调用应在 grace 内返回 nil, 且 (fd, seq) 记录已写入管道。
+	_ = readPipe.SetDeadline(time.Now().Add(30 * time.Second))
+	started := time.Now()
+	if err := protectSocket("tcp", "example.com:443", fixedRawConn(42)); err != nil {
+		t.Fatalf("protect socket blocked the dial with an error: %v", err)
+	}
+	elapsed := time.Since(started)
+	if elapsed < protectWaitTimeout/2 || elapsed > protectWaitTimeout+3*time.Second {
+		t.Fatalf("fail-open elapsed = %v, want ≈%v", elapsed, protectWaitTimeout)
+	}
+	var encoded [8]byte
 	if _, err := io.ReadFull(readPipe, encoded[:]); err != nil {
 		t.Fatalf("read protect request: %v", err)
 	}
-	if fd := binary.LittleEndian.Uint32(encoded[:]); fd != 42 {
+	if fd := binary.LittleEndian.Uint32(encoded[0:4]); fd != 42 {
 		t.Fatalf("protect fd = %d, want 42", fd)
 	}
-
-	select {
-	case err := <-protectReturned:
-		if !errors.Is(err, errProtectTimedOut) {
-			t.Fatalf("protect error = %v, want %v", err, errProtectTimedOut)
-		}
-	case <-time.After(protectResultTimeout + time.Second):
-		t.Fatal("protect request did not time out")
-	}
-	if session.active() {
-		t.Fatal("timed-out protect session remained active")
-	}
-	if currentProtectSession() != nil {
-		t.Fatal("timed-out protect session remained globally visible")
+	if seq := binary.LittleEndian.Uint32(encoded[4:8]); seq == 0 {
+		t.Fatal("protect seq must start from 1")
 	}
 
-	lateReplyReturned := make(chan struct{})
+	// 2) 带读者(模拟 ArkTS monitor): 按 seq 回执应并发唤醒各自的等待者。
+	pumpDone := make(chan struct{})
 	go func() {
-		SetProtectResult(true)
-		close(lateReplyReturned)
-	}()
-	select {
-	case <-lateReplyReturned:
-	case <-time.After(time.Second):
-		t.Fatal("late protect reply remained blocked")
-	}
-
-	monitorRead := make(chan error, 1)
-	go func() {
-		var trailing [1]byte
-		_, err := readPipe.Read(trailing[:])
-		monitorRead <- err
-	}()
-	select {
-	case err := <-monitorRead:
-		if !errors.Is(err, io.EOF) {
-			t.Fatalf("protect monitor pipe error = %v, want EOF", err)
+		defer close(pumpDone)
+		buf := make([]byte, 8)
+		for i := 0; i < 8; i++ {
+			if _, err := io.ReadFull(readPipe, buf); err != nil {
+				return
+			}
+			SetProtectResultForFd(binary.LittleEndian.Uint32(buf[0:4]),
+				binary.LittleEndian.Uint32(buf[4:8]), true)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("timed-out protect session left the monitor pipe open")
+	}()
+	results := make(chan time.Duration, 8)
+	waitStart := time.Now()
+	for i := 100; i < 108; i++ {
+		go func(fd uintptr) {
+			begin := time.Now()
+			if err := protectSocket("tcp", "example.com:443", fixedRawConn(fd)); err != nil {
+				t.Errorf("concurrent protect failed: %v", err)
+			}
+			results <- time.Since(begin)
+		}(uintptr(i))
+	}
+	for i := 0; i < 8; i++ {
+		select {
+		case d := <-results:
+			if d > protectWaitTimeout {
+				t.Fatalf("acked protect took %v, want concurrent wake (< %v)", d, protectWaitTimeout)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("concurrent protect waiters were not woken by per-fd acks")
+		}
+	}
+	if total := time.Since(waitStart); total > protectWaitTimeout {
+		// 并发验证: 串行实现至少要 8×grace 的一半, 并发应远低于单次 grace。
+		t.Logf("8 concurrent acked protects total %v (grace=%v)", total, protectWaitTimeout)
+	}
+	<-pumpDone
+
+	// 3) 会话退役: 等待者立即放行(不挂 grace 时长), 管道 EOF。
+	retireProtectSession(session)
+	retireStarted := time.Now()
+	if err := protectSocket("tcp", "example.com:443", fixedRawConn(7)); err != nil {
+		t.Fatalf("protect after retire: %v", err)
+	}
+	if time.Since(retireStarted) > time.Second {
+		t.Fatal("protect did not skip a retired session promptly")
+	}
+	var trailing [1]byte
+	if _, err := readPipe.Read(trailing[:]); !errors.Is(err, io.EOF) {
+		t.Fatalf("protect monitor pipe error = %v, want EOF", err)
 	}
 }
 

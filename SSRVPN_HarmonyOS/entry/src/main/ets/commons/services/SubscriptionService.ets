@@ -27,24 +27,78 @@ export class SubscriptionService {
 
   async init(context: Context): Promise<void> {
     this.store = await preferences.getPreferences(context, PREF_NAME);
-    const subsRaw = await this.store.get(KEY_SUBS, '[]') as string;
-    const subsJson = JSON.parse(subsRaw) as SubscriptionJson[];
-    this.subscriptions = SubscriptionService.mapSubs(subsJson);
-    const nodesRaw = await this.store.get(KEY_NODES, '[]') as string;
-    const nodesJson = JSON.parse(nodesRaw) as ProxyNodeJson[];
-    this.nodes = SubscriptionService.mapNodes(nodesJson);
+    this.subscriptions = [];
+    this.nodes = [];
+
+    try {
+      const subsRaw = await this.store.get(KEY_SUBS, '[]') as string;
+      this.subscriptions = SubscriptionService.mapSubs(JSON.parse(subsRaw) as Object);
+    } catch (e) {
+      AppLogger.warn(TAG, 'invalid subscriptions preferences ignored');
+    }
+
+    try {
+      const nodesRaw = await this.store.get(KEY_NODES, '[]') as string;
+      this.nodes = SubscriptionService.mapNodes(JSON.parse(nodesRaw) as Object);
+    } catch (e) {
+      AppLogger.warn(TAG, 'invalid nodes preferences ignored');
+    }
+
     AppLogger.info(TAG, `loaded ${this.subscriptions.length} subscriptions, ${this.nodes.length} nodes`);
   }
 
-  private static mapSubs(json: SubscriptionJson[]): Subscription[] {
+  private static validString(value: Object, maxLength: number, allowEmpty: boolean = true): boolean {
+    return typeof value === 'string' && value.length <= maxLength && (allowEmpty || value.length > 0);
+  }
+
+  private static validInteger(value: Object, min: number, max: number): boolean {
+    return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
+  }
+
+  private static validRefreshStatus(value: string): boolean {
+    return value === '' || value === SubscriptionRefreshStatus.OK
+      || value === SubscriptionRefreshStatus.NOT_MODIFIED
+      || value === SubscriptionRefreshStatus.NETWORK_ERROR
+      || value === SubscriptionRefreshStatus.PARSE_ERROR
+      || value === SubscriptionRefreshStatus.HTTP_ERROR;
+  }
+
+  private static mapSubs(json: Object): Subscription[] {
     const out: Subscription[] = [];
-    for (const j of json) {
+    if (!Array.isArray(json)) {
+      AppLogger.warn(TAG, 'subscriptions preferences root is not an array');
+      return out;
+    }
+    let skipped = 0;
+    for (const item of json as Object[]) {
+      if (item === null || typeof item !== 'object') {
+        skipped++;
+        continue;
+      }
+      const j = item as SubscriptionJson;
+      if (!SubscriptionService.validString(j.id, 256, false)
+        || !SubscriptionService.validString(j.name, 4096)
+        || !SubscriptionService.validString(j.url, 8192, false)
+        || !SubscriptionService.validString(j.headerName, 256)
+        || !SubscriptionService.validString(j.headerValue, 16 * 1024)
+        || !SubscriptionService.validString(j.lastRefreshResult, 64)
+        || !SubscriptionService.validRefreshStatus(j.lastRefreshResult)
+        || !SubscriptionService.validInteger(j.lastFetchedAt, 0, Number.MAX_SAFE_INTEGER)
+        || !SubscriptionService.validInteger(j.nodeCount, 0, 100000)
+        || typeof j.enabled !== 'boolean'
+        || !SubscriptionService.validInteger(j.sortOrder, 0, 100000)) {
+        skipped++;
+        continue;
+      }
       out.push(Subscription.fromPersistJson(j));
+    }
+    if (skipped > 0) {
+      AppLogger.warn(TAG, `ignored ${skipped} invalid subscription records`);
     }
     return out;
   }
 
-  /** 合并结果 → 节点模型（rawYaml 原样透传，proxyType 保留真实类型） */
+  /** 合并结果 → 节点模型（仅映射白名单结构化字段，proxyType 保留真实类型） */
   private static mergedToNodes(merged: MergedProxy[], subscriptionId: string): ProxyNode[] {
     const out: ProxyNode[] = [];
     let counter = 0;
@@ -62,7 +116,24 @@ export class SubscriptionService {
       n.obfs = m.obfs;
       n.obfsParam = m.obfsParam;
       n.proxyType = m.type;
-      n.rawYaml = m.rawYaml;
+      n.uuid = m.uuid;
+      n.alterId = m.alterId;
+      n.udp = m.udp;
+      n.network = m.network;
+      n.tls = m.tls;
+      n.servername = m.servername;
+      n.skipCertVerify = m.skipCertVerify;
+      n.flow = m.flow;
+      n.clientFingerprint = m.clientFingerprint;
+      n.realityPublicKey = m.realityPublicKey;
+      n.realityShortId = m.realityShortId;
+      n.wsPath = m.wsPath;
+      n.wsHost = m.wsHost;
+      n.grpcServiceName = m.grpcServiceName;
+      n.hyUp = m.hyUp;
+      n.hyDown = m.hyDown;
+      n.alpnList = m.alpnList;
+      n.rawYaml = '';
       if (m.type === 'ssr') {
         n.type = ProxyNodeType.SSR;
       } else if (m.type === 'ss') {
@@ -77,9 +148,56 @@ export class SubscriptionService {
     return out;
   }
 
-  public static mapNodes(json: ProxyNodeJson[]): ProxyNode[] {
+  public static mapNodes(json: Object): ProxyNode[] {
     const out: ProxyNode[] = [];
-    for (const j of json) {
+    if (!Array.isArray(json)) {
+      AppLogger.warn(TAG, 'nodes preferences root is not an array');
+      return out;
+    }
+    let skipped = 0;
+    for (const item of json as Object[]) {
+      if (item === null || typeof item !== 'object') {
+        skipped++;
+        continue;
+      }
+      const j = item as ProxyNodeJson;
+      const validType = j.type === 'ss' || j.type === 'ssr' || j.type === 'other';
+      if (!SubscriptionService.validString(j.id, 256, false)
+        || !SubscriptionService.validString(j.subscriptionId, 256, false)
+        || !SubscriptionService.validString(j.name, 4096)
+        || !SubscriptionService.validString(j.server, 4096, false)
+        || !SubscriptionService.validInteger(j.port, 1, 65535)
+        || !SubscriptionService.validString(j.password, 64 * 1024)
+        || !SubscriptionService.validString(j.method, 256)
+        || !SubscriptionService.validString(j.protocol, 256)
+        || !SubscriptionService.validString(j.protocolParam, 64 * 1024)
+        || !SubscriptionService.validString(j.obfs, 256)
+        || !SubscriptionService.validString(j.obfsParam, 64 * 1024)
+        || !SubscriptionService.validString(j.type, 32, false)
+        || !validType
+        || !SubscriptionService.validString(j.proxyType, 64)
+        || !SubscriptionService.validString(j.uuid, 4096)
+        || !SubscriptionService.validInteger(j.alterId, 0, 2147483647)
+        || typeof j.udp !== 'boolean'
+        || !SubscriptionService.validString(j.network, 256)
+        || typeof j.tls !== 'boolean'
+        || !SubscriptionService.validString(j.servername, 4096)
+        || typeof j.skipCertVerify !== 'boolean'
+        || !SubscriptionService.validString(j.flow, 4096)
+        || !SubscriptionService.validString(j.clientFingerprint, 256)
+        || !SubscriptionService.validString(j.realityPublicKey, 4096)
+        || !SubscriptionService.validString(j.realityShortId, 4096)
+        || !SubscriptionService.validString(j.wsPath, 64 * 1024)
+        || !SubscriptionService.validString(j.wsHost, 4096)
+        || !SubscriptionService.validString(j.grpcServiceName, 64 * 1024)
+        || (j.hyUp !== undefined && !SubscriptionService.validString(j.hyUp, 256))
+        || (j.hyDown !== undefined && !SubscriptionService.validString(j.hyDown, 256))
+        || (j.alpnList !== undefined && !SubscriptionService.validString(j.alpnList, 256))
+        || !SubscriptionService.validString(j.rawYaml, 128 * 1024)
+        || !SubscriptionService.validString(j.rawUri, 128 * 1024)) {
+        skipped++;
+        continue;
+      }
       const n = new ProxyNode();
       n.id = j.id;
       n.subscriptionId = j.subscriptionId;
@@ -94,9 +212,29 @@ export class SubscriptionService {
       n.obfsParam = j.obfsParam;
       n.type = j.type === 'ss' ? ProxyNodeType.SS : (j.type === 'ssr' ? ProxyNodeType.SSR : ProxyNodeType.UNKNOWN);
       n.proxyType = j.proxyType.length > 0 ? j.proxyType : j.type;
-      n.rawYaml = j.rawYaml;
+      n.uuid = j.uuid;
+      n.alterId = j.alterId;
+      n.udp = j.udp;
+      n.network = j.network;
+      n.tls = j.tls;
+      n.servername = j.servername;
+      n.skipCertVerify = j.skipCertVerify;
+      n.flow = j.flow;
+      n.clientFingerprint = j.clientFingerprint;
+      n.realityPublicKey = j.realityPublicKey;
+      n.realityShortId = j.realityShortId;
+      n.wsPath = j.wsPath;
+      n.wsHost = j.wsHost;
+      n.grpcServiceName = j.grpcServiceName;
+      n.hyUp = j.hyUp ?? '';
+      n.hyDown = j.hyDown ?? '';
+      n.alpnList = j.alpnList ?? '';
+      n.rawYaml = '';
       n.rawUri = j.rawUri;
       out.push(n);
+    }
+    if (skipped > 0) {
+      AppLogger.warn(TAG, `ignored ${skipped} invalid node records`);
     }
     return out;
   }
@@ -176,8 +314,8 @@ export class SubscriptionService {
         const merged: MergedProxy[] = YamlMerger.merge([body], sub.name, prev);
         parsed = SubscriptionService.mergedToNodes(merged, sub.id);
         if (this.store !== null) {
-          const boundedBody = body.length > 512 * 1024 ? body.substring(0, 512 * 1024) : body;
-          await this.store.put(`yaml_cache_${id}`, boundedBody);
+          // 缓存只保存白名单结构化节点的安全 YAML，禁止缓存或回放订阅原文。
+          await this.store.put(`yaml_cache_${id}`, YamlMerger.toYaml(merged));
         }
       } else {
         parsed = SubscriptionParser.parse(body, sub.id);
@@ -291,10 +429,12 @@ export class SubscriptionService {
     return '';
   }
 
-  /** 判断是否为节点链接（ssr:// 或 ss://） */
+  /** 判断是否为节点直链（与 ProxyNode.fromUri 支持的 scheme 一致） */
   static isNodeUri(input: string): boolean {
     const t = input.trim();
-    return t.startsWith('ssr://') || t.startsWith('ss://');
+    return t.startsWith('ssr://') || t.startsWith('ss://') || t.startsWith('vless://')
+      || t.startsWith('vmess://') || t.startsWith('trojan://') || t.startsWith('hysteria2://')
+      || t.startsWith('hy2://');
   }
 }
 
@@ -306,9 +446,13 @@ export class ManualNodeStore {
 
   static async init(context: Context): Promise<void> {
     ManualNodeStore.store = await preferences.getPreferences(context, PREF_NAME);
-    const raw = await ManualNodeStore.store.get('manual_nodes_json', '[]') as string;
-    const json = JSON.parse(raw) as ProxyNodeJson[];
-    ManualNodeStore.nodes = SubscriptionService.mapNodes(json);
+    ManualNodeStore.nodes = [];
+    try {
+      const raw = await ManualNodeStore.store.get('manual_nodes_json', '[]') as string;
+      ManualNodeStore.nodes = SubscriptionService.mapNodes(JSON.parse(raw) as Object);
+    } catch (e) {
+      AppLogger.warn(TAG, 'invalid manual nodes preferences ignored');
+    }
   }
 
   static all(): ProxyNode[] {
@@ -366,6 +510,24 @@ export class ProxyNodeJson {
   obfsParam: string = '';
   type: string = 'ssr';
   proxyType: string = '';
+  uuid: string = '';
+  alterId: number = 0;
+  udp: boolean = false;
+  network: string = '';
+  tls: boolean = false;
+  servername: string = '';
+  skipCertVerify: boolean = false;
+  flow: string = '';
+  clientFingerprint: string = '';
+  realityPublicKey: string = '';
+  realityShortId: string = '';
+  wsPath: string = '';
+  wsHost: string = '';
+  grpcServiceName: string = '';
+  /** hysteria2 扩展字段（可选: 旧存储无这些键, 读取端 ?? '' 兜底） */
+  hyUp?: string;
+  hyDown?: string;
+  alpnList?: string;
   rawYaml: string = '';
   rawUri: string = '';
 
@@ -384,7 +546,24 @@ export class ProxyNodeJson {
     j.obfsParam = n.obfsParam;
     j.type = n.type === ProxyNodeType.SS ? 'ss' : (n.type === ProxyNodeType.SSR ? 'ssr' : 'other');
     j.proxyType = n.proxyType;
-    j.rawYaml = n.rawYaml;
+    j.uuid = n.uuid;
+    j.alterId = n.alterId;
+    j.udp = n.udp;
+    j.network = n.network;
+    j.tls = n.tls;
+    j.servername = n.servername;
+    j.skipCertVerify = n.skipCertVerify;
+    j.flow = n.flow;
+    j.clientFingerprint = n.clientFingerprint;
+    j.realityPublicKey = n.realityPublicKey;
+    j.realityShortId = n.realityShortId;
+    j.wsPath = n.wsPath;
+    j.wsHost = n.wsHost;
+    j.grpcServiceName = n.grpcServiceName;
+    j.hyUp = n.hyUp;
+    j.hyDown = n.hyDown;
+    j.alpnList = n.alpnList;
+    j.rawYaml = '';
     j.rawUri = n.rawUri;
     return j;
   }

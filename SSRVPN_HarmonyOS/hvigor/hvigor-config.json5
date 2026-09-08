@@ -10,5 +10,8 @@
   },
   "logging": {},
   "debugging": {},
-  "nodeOptions": {}
+  "nodeOptions": {},
+  "properties": {
+    "ohos.pack.compressLevel": "ultimate"
+  }
 }

@@ -943,7 +943,7 @@ struct SubscriptionPage {
                   .shadow({ radius: 28, color: '#38000000', offsetY: 14 })
                   .margin({ bottom: 12 })
                   .gesture(LongPressGesture().onAction(() => this.openEdit(sub)))
-                }, (sub: Subscription) => sub.id + sub.name)
+                }, (sub: Subscription) => `${sub.id}|${sub.name}|${sub.nodeCount}|${sub.lastFetchedAt}|${sub.enabled ? 1 : 0}`)
               }
             }
             .constraintSize({ maxWidth: Ui.pageMaxWidth })

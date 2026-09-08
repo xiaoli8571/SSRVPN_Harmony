@@ -1,9 +1,9 @@
-{
+﻿{
   "app": {
-    "bundleName": "com.ssrvpn.harmonyos",
+    "bundleName": "com.ssrvpn.client",
     "vendor": "SSRVPN",
-    "versionCode": 4028,
-    "versionName": "4.0.28",
+    "versionCode": 4033,
+    "versionName": "4.0.33",
     "icon": "$media:app_icon",
     "label": "$string:app_name"
   }

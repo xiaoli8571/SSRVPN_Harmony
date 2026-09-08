@@ -50,6 +50,12 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
   private connection: vpnExtension.VpnConnection | null = null;
   /** 心跳定时器（onDestroy 时清理） */
   private heartbeatTimer: number = -1;
+  /** Protect socket 请求轮询器，由 Go 核心请求逐 socket 绕过 VPN。 */
+  private protectTimer: number = -1;
+  /** 后台长时任务是否已启动。 */
+  private backgroundRunning: boolean = false;
+  /** 统一清理的幂等门控。 */
+  private cleanupPromise: Promise<void> | null = null;
   /** 把扩展进程内的启动失败原因写回 UI 可读的目录（跨进程无法直接共享内存） */
   private reportStartError(configPath: string, message: string): void {
     try {
@@ -110,12 +116,88 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
     }
   }
 
+  /**
+   * 排空 Go 内核的逐 fd protect 请求队列, 并发 protect 并按 fd 回执。
+   *
+   * 语义(v3, 真机双实证): protectProcessNet 在本机对 Go socket 不生效, "先
+   * protect 后 connect" 的顺序保证全靠这条通道 —— 必须回执(Go 等自己的 fd 回执
+   * 才放行 connect, 上限 800ms, 超时 fail-open)。同时按批排空 + 并发 promise,
+   * 杜绝旧版"5s 串行等待→排队超时→会话退役→全线 unavailable"的死亡螺旋。
+   */
+  private startProtectMonitor(): void {
+    this.stopProtectMonitor();
+    this.protectTimer = setInterval(() => {
+      const connection = this.connection;
+      if (connection === null) {
+        return;
+      }
+      for (let i = 0; i < 16; i++) {
+        const request: number[] = coreBridge.readProtectSocketFd();
+        const fd: number = request[0];
+        if (fd < 0) {
+          break;
+        }
+        const seq: number = request[1];
+        // protect 失败(fd 已关闭/复用等)也要回执: Go 侧收到回执(含 false)立即放行拨号。
+        connection.protect(fd).then(() => {
+          coreBridge.setProtectResultForFd(fd, seq, true);
+        }).catch(() => {
+          coreBridge.setProtectResultForFd(fd, seq, false);
+        });
+      }
+    }, 10);
+  }
+
+  private stopProtectMonitor(): void {
+    if (this.protectTimer >= 0) {
+      clearInterval(this.protectTimer);
+      this.protectTimer = -1;
+    }
+  }
+
+  private cleanupResources(): Promise<void> {
+    if (this.cleanupPromise !== null) {
+      return this.cleanupPromise;
+    }
+    this.cleanupPromise = this.cleanupResourcesInternal().finally(() => {
+      this.cleanupPromise = null;
+    });
+    return this.cleanupPromise;
+  }
+
+  private async cleanupResourcesInternal(): Promise<void> {
+    this.stopHeartbeat();
+    this.stopProtectMonitor();
+    try {
+      await coreBridge.stopCore();
+    } catch (e) {
+      AppLogger.warn(TAG, 'core cleanup failed');
+    }
+    const connection = this.connection;
+    this.connection = null;
+    if (connection !== null) {
+      try {
+        await connection.destroy();
+      } catch (e) {
+        AppLogger.warn(TAG, 'VPN connection cleanup failed');
+      }
+    }
+    if (this.backgroundRunning) {
+      this.backgroundRunning = false;
+      try {
+        await backgroundTaskManager.stopBackgroundRunning(this.context);
+      } catch (e) {
+        AppLogger.warn(TAG, 'background task cleanup failed');
+      }
+    }
+  }
+
   async onCreate(want: Want): Promise<void> {
     AppLogger.info(TAG, 'vpn onCreate');
     // 长时任务（对应 Android 前台服务），失败不阻塞连接流程
     try {
       const entryWant: Want = {
-        bundleName: 'com.ssrvpn.harmonyos',
+        bundleName: 'com.ssrvpn.client',
         abilityName: 'EntryAbility'
       };
       const agentRequest: wantAgent.WantAgentInfo = {
@@ -127,15 +209,16 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
       const agent = await wantAgent.getWantAgent(agentRequest);
       await backgroundTaskManager.startBackgroundRunning(this.context,
         backgroundTaskManager.BackgroundMode.TASK_KEEPING, agent);
+      this.backgroundRunning = true;
     } catch (e) {
-      AppLogger.warn(TAG, `background task start failed: ${e instanceof Error ? e.message : String(e)}`);
+      AppLogger.warn(TAG, 'background task start failed');
     }
 
     const params = want.parameters;
     let configPath = (params !== undefined && params !== null) ? (params['configPath'] as string) : '';
     if (configPath === undefined || configPath.length === 0) {
       configPath = `${this.context.cacheDir}/mihomo_config.yaml`;
-      AppLogger.warn(TAG, `want.parameters.configPath missing; fallback=${configPath}`);
+      AppLogger.warn(TAG, 'config path missing; using cache configuration');
     }
     this.clearStartError(configPath);
 
@@ -220,43 +303,35 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
       }
       if (pkgs.length > 0) {
         config.blockedApplications = pkgs;
-        AppLogger.info(TAG, `blockedApplications(${pkgs.length}): ${pkgs.join(' ')}`);
+        AppLogger.info(TAG, `blockedApplications configured: count=${pkgs.length}`);
       }
     }
 
     try {
       this.connection = vpnExtension.createVpnConnection(this.context);
       const tunFd = await this.connection.create(config);
-      AppLogger.info(TAG, `TUN created, fd=${tunFd}`);
+      AppLogger.info(TAG, 'TUN created');
 
-      // 防回环（对齐 NekoBox 的 protectProcessNet）：保护扩展进程（Go 内核所在进程）
-      // 后续创建的 socket 绕过 VPN，代理出站与 DNS 引导走物理网络。
-      // 不加的话内核出站连接会被 TUN 路由再次捕获，形成回环导致全部超时。
-      try {
-        await this.connection.protectProcessNet();
-        AppLogger.info(TAG, 'protectProcessNet ok: core sockets bypass VPN');
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        this.reportStartError(configPath, `VPN 扩展启动异常: 防回环保护失败: ${msg}`);
-        AppLogger.error(TAG, `protectProcessNet failed: ${msg}`);
-        return;
-      }
+      // 同时启用进程级保护与逐 socket Protect 通道，避免出站流量回灌 TUN。
+      await this.connection.protectProcessNet();
+      AppLogger.info(TAG, 'protectProcessNet enabled');
 
       const attached = await coreBridge.attachTun(tunFd, VPN_MTU);
       if (!attached) {
-        this.reportStartError(configPath, '内核桥加载失败（attachTun）');
-        AppLogger.error(TAG, 'attachTun failed (内核桥未加载?)');
-        return;
+        throw new Error('内核桥加载失败（attachTun）');
       }
+      const protectReady = await coreBridge.initProtect();
+      if (!protectReady) {
+        throw new Error('内核 Protect 通道初始化失败');
+      }
+      this.startProtectMonitor();
 
-      // 内核（含 Clash API 控制面）在扩展进程内启动；成功后写 OK 标记给 UI 进程轮询
+      // startCore 在线程池执行，ArkTS 事件循环持续处理 Protect 请求。
       const ok = await coreBridge.startCore(configPath);
       AppLogger.info(TAG, `core start result: ${ok}`);
       if (!ok) {
         const coreErr = await coreBridge.lastError();
-        this.reportStartError(configPath, coreErr.length > 0 ? coreErr : '内核启动失败（未知原因）');
-        AppLogger.error(TAG, `core error: ${coreErr}`);
-        return;
+        throw new Error(coreErr.length > 0 ? coreErr : '内核启动失败（未知原因）');
       }
       this.reportStartOk(configPath);
       this.startHeartbeat(configPath);
@@ -264,29 +339,14 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
       const msg = e instanceof Error ? e.message : String(e);
       this.reportStartError(configPath, `VPN 扩展启动异常: ${msg}`);
       AppLogger.error(TAG, `vpn onCreate failed: ${msg}`);
+      await this.cleanupResources();
     }
   }
 
   onDestroy(): void {
     AppLogger.info(TAG, 'vpn onDestroy');
-    this.stopHeartbeat();
-    try {
-      coreBridge.stopCore();
-    } catch (e) {
-      // 忽略停止内核异常
-    }
-    if (this.connection !== null) {
-      try {
-        this.connection.destroy().catch(() => {});
-      } catch (e) {
-        // 忽略
-      }
-      this.connection = null;
-    }
-    try {
-      backgroundTaskManager.stopBackgroundRunning(this.context).catch(() => {});
-    } catch (e) {
-      // 忽略停止后台任务异常
-    }
+    this.cleanupResources().catch((e: Error) => {
+      AppLogger.warn(TAG, `vpn onDestroy cleanup failed: ${e instanceof Error ? e.message : String(e)}`);
+    });
   }
 }

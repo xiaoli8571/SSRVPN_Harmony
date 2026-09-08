@@ -143,11 +143,115 @@ export default function logicTest() {
       expect(hasC).assertTrue();
     });
 
+    it('mixed_protocol_yaml_skips_bad_nodes_and_roundtrips_options', 0, () => {
+      const yaml = 'proxies:\n' +
+        '  - {name: "SS", type: ss, server: ss.example.com, port: 443, cipher: aes-128-gcm, password: "pw"}\n' +
+        '  - {name: "bad", type: ss, server: bad.example.com, port: 70000, cipher: aes-128-gcm, password: "pw"}\n' +
+        '  - {name: "VL", type: vless, server: vl.example.com, port: 443, uuid: "123e4567-e89b-12d3-a456-426614174000", network: ws, tls: true, reality-opts: {public-key: "pk", short-id: "sid"}, ws-opts: {path: "/ws", headers: {Host: "cdn.example.com"}}}\n' +
+        '  - {name: "VM", type: vmess, server: vm.example.com, port: 443, uuid: "123e4567-e89b-12d3-a456-426614174001", alterId: 0, cipher: auto, network: grpc, tls: true, grpc-opts: {grpc-service-name: "svc"}}\n' +
+        '  - {name: "TR", type: trojan, server: tr.example.com, port: 443, password: "secret", tls: true}\n';
+      const parsed = SubscriptionParser.parse(yaml, 'mixed');
+      expect(parsed.length).assertEqual(4);
+      const merged = YamlMerger.merge([yaml], 'mixed', '');
+      expect(merged.length).assertEqual(4);
+      const cached = YamlMerger.toYaml(merged);
+      const reread = SubscriptionParser.parse(cached, 'reread');
+      expect(reread.length).assertEqual(4);
+      const vl = reread.find((n) => n.proxyType === 'vless');
+      const vm = reread.find((n) => n.proxyType === 'vmess');
+      expect(vl !== undefined).assertTrue();
+      expect(vm !== undefined).assertTrue();
+      expect(vl?.realityPublicKey ?? '').assertEqual('pk');
+      expect(vl?.realityShortId ?? '').assertEqual('sid');
+      expect(vl?.wsPath ?? '').assertEqual('/ws');
+      expect(vl?.wsHost ?? '').assertEqual('cdn.example.com');
+      expect(vm?.grpcServiceName ?? '').assertEqual('svc');
+    });
+
+    it('config_generator_all_protocols_and_injection_defense', 0, () => {
+      const ss = new ProxyNode();
+      ss.id = 'ss'; ss.name = 'SS'; ss.server = 'ss.example.com'; ss.port = 443;
+      ss.method = 'aes-128-gcm'; ss.password = 'pw'; ss.proxyType = 'ss';
+      const vless = new ProxyNode();
+      vless.id = 'vl'; vless.name = 'VLESS'; vless.server = 'vl.example.com'; vless.port = 443;
+      vless.proxyType = 'vless'; vless.uuid = '123e4567-e89b-12d3-a456-426614174000';
+      vless.network = 'ws'; vless.tls = true; vless.wsPath = '/ws'; vless.wsHost = 'cdn.example.com';
+      const vmess = new ProxyNode();
+      vmess.id = 'vm'; vmess.name = 'VMESS'; vmess.server = 'vm.example.com'; vmess.port = 443;
+      vmess.proxyType = 'vmess'; vmess.uuid = '123e4567-e89b-12d3-a456-426614174001';
+      vmess.method = 'auto'; vmess.network = 'grpc'; vmess.grpcServiceName = 'svc';
+      const trojan = new ProxyNode();
+      trojan.id = 'tr'; trojan.name = 'TROJAN'; trojan.server = 'tr.example.com'; trojan.port = 443;
+      trojan.proxyType = 'trojan'; trojan.password = 'secret'; trojan.tls = true;
+      const injected = new ProxyNode();
+      injected.id = 'bad'; injected.name = 'bad\n  - MATCH,DIRECT'; injected.server = 'bad.example.com';
+      injected.port = 443; injected.method = 'aes-128-gcm'; injected.password = 'pw'; injected.proxyType = 'ss';
+      const settings = new AppSettings();
+      const config = ClashConfigGenerator.generate(vless, [ss, vless, vmess, trojan, injected], settings,
+        7890, 9090, 'secret');
+      expect(config.includes('type: ss')).assertTrue();
+      expect(config.includes('type: vless')).assertTrue();
+      expect(config.includes('type: vmess')).assertTrue();
+      expect(config.includes('type: trojan')).assertTrue();
+      expect(config.includes('grpc-service-name: "svc"')).assertTrue();
+      expect(config.includes('bad\n  - MATCH,DIRECT')).assertFalse();
+    });
+
+    it('hysteria2_uri_yaml_and_generator', 0, () => {
+      // 1) hysteria2:// URI 解析（含中文 percent-encoded 名称、insecure、sni、obfs、带宽）
+      const uri = 'hysteria2://p@ssw0rd@sg01.example.xyz:8443/?insecure=1&sni=localhost'
+        + '&obfs=salamander&obfs-password=abc123&up=114&down=514&pinSHA256=deadbeef'
+        + '#%E6%96%B0%E5%8A%A0%E5%9D%A101';
+      const n = ProxyNode.fromUri(uri, 't', 'id1');
+      expect(n !== null).assertTrue();
+      expect(n?.name ?? '').assertEqual('新加坡01');
+      expect(n?.password ?? '').assertEqual('p@ssw0rd');
+      expect(n?.proxyType ?? '').assertEqual('hysteria2');
+      expect(n?.port ?? 0).assertEqual(8443);
+      expect(n?.skipCertVerify ?? false).assertTrue();
+      expect(n?.servername ?? '').assertEqual('localhost');
+      expect(n?.obfs ?? '').assertEqual('salamander');
+      expect(n?.obfsParam ?? '').assertEqual('abc123');
+      expect(n?.hyUp ?? '').assertEqual('114');
+      expect(n?.hyDown ?? '').assertEqual('514');
+      expect(n?.clientFingerprint ?? '').assertEqual('deadbeef');
+      // 2) 配置生成：键名 sni/fingerprint/obfs-password/up/down 正确
+      const line = ClashConfigGenerator.proxyYamlLine(n!);
+      expect(line.includes('type: hysteria2')).assertTrue();
+      expect(line.includes('sni: "localhost"')).assertTrue();
+      expect(line.includes('fingerprint: "deadbeef"')).assertTrue();
+      expect(line.includes('obfs-password: "abc123"')).assertTrue();
+      expect(line.includes('up: "114"')).assertTrue();
+      expect(line.includes('down: "514"')).assertTrue();
+      expect(line.includes('servername:')).assertFalse();
+      expect(line.includes('client-fingerprint:')).assertFalse();
+      // 3) Clash YAML 流式条目解析 + 缓存往返
+      const yaml = 'proxies:\n'
+        + '  - { name: \u0027剩余流量：596.51 GB\u0027, server: sg01.example.xyz, port: 8443, udp: true,'
+        + ' skip-cert-verify: true, sni: localhost, type: hysteria2, password: e73cc1c7-545d-437b-b328-7490b0f06d28 }\n';
+      const parsed = SubscriptionParser.parse(yaml, 'hy');
+      expect(parsed.length).assertEqual(1);
+      expect(parsed[0].proxyType).assertEqual('hysteria2');
+      expect(parsed[0].servername).assertEqual('localhost');
+      const cached = YamlMerger.toYaml(YamlMerger.merge([yaml], 'hy', ''));
+      const reread = SubscriptionParser.parse(cached, 'hy2');
+      expect(reread.length).assertEqual(1);
+      expect(reread[0].password).assertEqual('e73cc1c7-545d-437b-b328-7490b0f06d28');
+      expect(reread[0].skipCertVerify).assertTrue();
+      // 4) 缺 password 的 hy2 节点必须被拒绝
+      expect(ProxyNode.fromUri('hysteria2://@x.example.com:443/', 't', 'id2') === null).assertTrue();
+    });
+
     it('subscription_url_redact', 0, () => {
       expect(SubscriptionFetchPolicy.redactUrl('https://sub.example.com/path?token=abc'))
         .assertEqual('sub.example.com');
       expect(SubscriptionFetchPolicy.isValidSubscriptionUrl('https://a.com/x')).assertTrue();
       expect(SubscriptionFetchPolicy.isValidSubscriptionUrl('ftp://a.com')).assertFalse();
+      expect(SubscriptionFetchPolicy.isValidSubscriptionUrl('http://a.com/x')).assertFalse();
+      expect(SubscriptionFetchPolicy.isValidSubscriptionUrl('https://localhost/x')).assertFalse();
+      expect(SubscriptionFetchPolicy.isValidSubscriptionUrl('https://127.0.0.1/x')).assertFalse();
+      expect(SubscriptionFetchPolicy.isValidSubscriptionUrl('https://192.168.1.1/x')).assertFalse();
+      expect(SubscriptionFetchPolicy.isValidSubscriptionUrl('https://a.com:8443/x')).assertFalse();
     });
   });
 }

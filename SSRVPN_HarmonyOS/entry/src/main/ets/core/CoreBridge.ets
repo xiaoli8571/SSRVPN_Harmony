@@ -37,6 +37,29 @@ export class CoreBridgeImpl {
     return native.attachTunFd(fd, mtu);
   }
 
+  /** 初始化 Go socket-protect 请求通道。 */
+  async initProtect(): Promise<boolean> {
+    if (!this.ensureLoaded()) {
+      return false;
+    }
+    return native.initProtect() >= 0;
+  }
+
+  /** 非阻塞读取一条 protect 请求 [socketFd, seq]；无请求时 socketFd 为 -1。 */
+  readProtectSocketFd(): number[] {
+    return native.readProtectSocketFd();
+  }
+
+  /** 将 VpnConnection.protect() 的结果回传给 Go bridge。 */
+  setProtectResult(ok: boolean): void {
+    native.setProtectResult(ok);
+  }
+
+  /** 按 seq 精确回传 protect 结果, 唤醒对应拨号协程(旧符号保留兼容)。 */
+  setProtectResultForFd(fd: number, seq: number, ok: boolean): void {
+    native.setProtectResultForFd(fd, seq, ok);
+  }
+
   /** 启动内核（configPath 为已写入的 Mihomo YAML 文件路径） */
   async startCore(configPath: string): Promise<boolean> {
     if (!this.ensureLoaded()) {
@@ -47,6 +70,7 @@ export class CoreBridgeImpl {
 
   async stopCore(): Promise<void> {
     native.stopCore();
+    this.tunFd = -1;
   }
 
   async isCoreAlive(): Promise<boolean> {

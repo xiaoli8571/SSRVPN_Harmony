@@ -5,14 +5,36 @@
 # Output: entry\libs\arm64-v8a\libgojni.so (ohos arm64, musl, c-shared, tags: with_gvisor,cmfa)
 $ErrorActionPreference = 'Stop'
 
-$SrcDir = 'C:\Users\xiaoli\Downloads\SSRVPN-HarmonyOS-full-20260907-0851\SSRVPN-HarmonyOS-full\mihomo-build\mihomo-7031b7569831677a8d89ad8a8a3347db116ba1a8'
-$NdkClang = 'C:\PROGRA~1\Huawei\DEVECO~1\sdk\default\openharmony\native\llvm\bin\clang.exe'
-$NdkSysroot = 'C:\PROGRA~1\Huawei\DEVECO~1\sdk\default\openharmony\native\sysroot'
-$GoRoot = 'C:\Users\xiaoli\ohos-go-build\ohos_golang_go'
+# Resolve project-relative paths so the recipe remains reproducible after moving
+# or cloning the repository. Environment variables allow CI/local overrides.
+$ProjRoot = Split-Path -Parent $PSScriptRoot
+$RepoRoot = Split-Path -Parent $ProjRoot
+$SrcDir = $env:MIHOMO_SRC
+if (-not $SrcDir) {
+  $candidate = Get-ChildItem -LiteralPath (Join-Path $RepoRoot 'mihomo-build') -Directory -Filter 'mihomo-*' -ErrorAction SilentlyContinue |
+    Where-Object { Test-Path (Join-Path $_.FullName 'go.mod') } |
+    Select-Object -First 1
+  if ($null -eq $candidate) {
+    Write-Error 'Mihomo source not found. Set MIHOMO_SRC to a source directory containing go.mod.'
+    exit 1
+  }
+  $SrcDir = $candidate.FullName
+}
+
+$SdkNative = $env:OHOS_NDK
+if (-not $SdkNative) {
+  $SdkNative = Join-Path $env:LOCALAPPDATA 'OpenHarmony\Sdk\23\native'
+}
+$NdkClang = Join-Path $SdkNative 'llvm\bin\clang.exe'
+$NdkClangxx = Join-Path $SdkNative 'llvm\bin\clang++.exe'
+$NdkSysroot = Join-Path $SdkNative 'sysroot'
+$GoRoot = $env:OHOS_GOROOT
+if (-not $GoRoot) {
+  $GoRoot = Join-Path $env:USERPROFILE 'ohos-go-build\ohos_golang_go'
+}
 $GoExe = Join-Path $GoRoot 'bin\go.exe'
-$ProjRoot = 'C:\Users\xiaoli\Downloads\SSRVPN-HarmonyOS-full-20260907-0851\SSRVPN-HarmonyOS-full\SSRVPN_HarmonyOS'
 $OutDir = Join-Path $ProjRoot 'entry\libs\arm64-v8a'
-$LogDir = 'C:\Users\xiaoli\Downloads\SSRVPN-HarmonyOS-full-20260907-0851\SSRVPN-HarmonyOS-full'
+$LogDir = $ProjRoot
 
 if (-not (Test-Path $NdkClang)) { Write-Error "NDK clang not found: $NdkClang"; exit 1 }
 if (-not (Test-Path $GoExe)) { Write-Error "OpenHarmony Go not found: $GoExe"; exit 1 }
@@ -20,7 +42,7 @@ New-Item -ItemType Directory -Force $OutDir | Out-Null
 
 $env:GOROOT = $GoRoot
 $env:GOTOOLCHAIN = 'local'
-$env:Path = "$GoRoot\bin;C:\Program Files\Huawei\DevEco Studio\sdk\default\openharmony\native\llvm\bin;$env:Path"
+$env:Path = "$GoRoot\bin;$(Join-Path $SdkNative 'llvm\bin');$env:Path"
 $env:GOPROXY = 'https://goproxy.cn,https://proxy.golang.org,direct'
 $env:CGO_ENABLED = '1'
 $env:GOOS = 'openharmony'
@@ -28,7 +50,7 @@ $env:GOARCH = 'arm64'
 $env:GOFLAGS = '-trimpath'
 $env:GOMAXPROCS = '1'
 $env:CC = "$NdkClang --target=aarch64-linux-ohos --sysroot=$NdkSysroot"
-$env:CXX = "C:\PROGRA~1\Huawei\DEVECO~1\sdk\default\openharmony\native\llvm\bin\clang++.exe --target=aarch64-linux-ohos --sysroot=$NdkSysroot"
+$env:CXX = "$NdkClangxx --target=aarch64-linux-ohos --sysroot=$NdkSysroot"
 $env:CGO_CFLAGS = "--target=aarch64-linux-ohos --sysroot=$NdkSysroot -ftls-model=global-dynamic"
 $env:CGO_CPPFLAGS = $env:CGO_CFLAGS
 $env:CGO_CXXFLAGS = $env:CGO_CFLAGS
@@ -37,7 +59,7 @@ Set-Location $SrcDir
 Write-Host '==> building mihomo c-shared for ohos arm64...'
 $outLog = Join-Path $LogDir 'ssrvpn_go_build_out.log'
 $errLog = Join-Path $LogDir 'ssrvpn_go_build_err.log'
-$argLine = 'build -p 1 -buildmode=c-shared -tags with_gvisor,cmfa -ldflags "-s -w" -o "' + "$OutDir\libgojni.so" + '" .'
+$argLine = 'build -p 1 -buildmode=c-shared -tags with_gvisor,cmfa -ldflags "-s -w -buildid=" -o "' + "$OutDir\libgojni.so" + '" .'
 $p = Start-Process -FilePath $GoExe `
   -ArgumentList $argLine `
   -WorkingDirectory $SrcDir -NoNewWindow -PassThru -Wait `

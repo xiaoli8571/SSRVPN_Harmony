@@ -6,6 +6,9 @@ add_definitions(-DOHOS_PLATFORM)
 
 add_library(ssrvpn_core_napi SHARED ssrvpn_core_napi.cpp)
 
+target_include_directories(ssrvpn_core_napi PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../libs/${OHOS_ARCH})
+
 # Register libgojni.so as an imported HAP library. IMPORTED_NO_SONAME forces
 # a basename-only DT_NEEDED entry (libgojni.so), avoiding the invalid Windows
 # build path that HarmonyOS cannot resolve inside the VPN extension process.

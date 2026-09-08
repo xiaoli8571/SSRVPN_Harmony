@@ -1,18 +1,23 @@
 /**
  * DoH 解析器（UI 进程）—— 代理服务器域名的防投毒解析。
  *
- * 背景: 明文 UDP DNS 会被 GFW 按域名投毒(真机实测: 代理服务器域名被注入 Facebook
- * 段 IP, 内核拨假地址全线 i/o timeout, 表现为"连上了但 YouTube 等全部打不开")。
- * DoH 是 HTTPS 加密查询, 注入无法篡改; doh.pub / dns.alidns.com 国内直连可达。
+ * 背景: 明文 UDP DNS 会被 GFW 按域名投毒(真机实测: 代理服务器域名被追加注入
+ * Cloudflare/NS 段假记录, 与权威应答混在一起, 内核拨到假地址全线 i/o timeout,
+ * 表现为"连上了但 YouTube 等全部打不开")。DoH 是 HTTPS 加密查询, 注入无法篡改;
+ * 权威直查 + doh.pub + 阿里 DoH + 腾讯 UDP 四方比对验证过: DoH 应答与权威一致,
+ * pin 的就是唯一真实记录。
  *
  * 必须在 UI 进程、VPN 隧道建立之前调用(此时网络干净)。解析结果写进 YAML 的
  * hosts: 段, 内核直接用真实 IP 拨号代理服务器, 彻底绕开运行期被污染的 DNS。
+ * 未解析出的域名不 pin(内核回退 proxy-server-nameserver), 但连接时会有日志点名。
  */
 import { http } from '@kit.NetworkKit';
 import { AppLogger } from '../utils/AppLogger';
 
 const TAG = 'DoHResolver';
-const ENDPOINTS: string[] = ['https://doh.pub/dns-query', 'https://dns.alidns.com/dns-query'];
+// 阿里 DoH 的 GET-JSON 入口是 /resolve(/dns-query 只收 wire-format, GET JSON 会 400,
+// 真机旧版就是因此少了一个可用端点, doh.pub 瞬时超时时域名直接漏 pin)。
+const ENDPOINTS: string[] = ['https://doh.pub/dns-query', 'https://dns.alidns.com/resolve'];
 
 /** DoH JSON 应答结构(只取需要的字段) */
 interface DoHAnswer {
@@ -29,15 +34,25 @@ interface DoHResponse {
 export class DoHResolver {
   /** 跨连接缓存: domain -> ip, 避免每次连接重复解析 */
   private static cache: Map<string, string> = new Map<string, string>();
+  /** 并发度: 一次 TLS 握手 + 查询约 200-400ms, 16 路足够 3s 内清几十上百个域名 */
+  private static readonly WORKERS: number = 16;
 
   /**
-   * 批量解析多个域名(去重后), 带全局时间预算, 超时未解析的域名跳过(内核回退
-   * proxy-server-nameserver)。返回 domain->ip 映射(仅含解析成功的)。
+   * 批量解析多个域名(去重后), 带全局时间预算。跑两轮: 第一轮失败的域名
+   * (端点瞬时超时/限流)在预算内重试一轮 —— 真机实测单个端点偶发失败会直接
+   * 漏 pin(如 chuixuevl1), 两轮 + 双端点把漏 pin 概率压到接近零。
+   * 预算耗尽未解析的域名跳过(内核回退 proxy-server-nameserver)。
    */
-  static async resolveMany(domains: string[], budgetMs: number = 5000): Promise<Record<string, string>> {
+  static async resolveMany(domains: string[], budgetMs: number = 6000): Promise<Record<string, string>> {
     const result: Record<string, string> = {};
-    const pending: string[] = [];
-    for (const d of domains) {
+    const seen = new Set<string>();
+    let pending: string[] = [];
+    for (const raw of domains) {
+      const d = raw.toLowerCase();
+      if (seen.has(d)) {
+        continue;
+      }
+      seen.add(d);
       const cached = DoHResolver.cache.get(d);
       if (cached !== undefined && cached.length > 0) {
         result[d] = cached;
@@ -49,26 +64,52 @@ export class DoHResolver {
       return result;
     }
     const deadline = Date.now() + budgetMs;
-    // 并发 8
-    const workers: Promise<void>[] = [];
-    let idx = 0;
-    for (let w = 0; w < 8; w++) {
-      workers.push((async (): Promise<void> => {
-        while (idx < pending.length) {
-          if (Date.now() > deadline) {
-            return;
+    for (let pass = 0; pass < 2 && pending.length > 0; pass++) {
+      const current: string[] = pending;
+      const remaining: string[] = [];
+      const workers: Promise<void>[] = [];
+      let idx = 0;
+      for (let w = 0; w < DoHResolver.WORKERS; w++) {
+        workers.push((async (): Promise<void> => {
+          for (;;) {
+            if (Date.now() > deadline) {
+              return;
+            }
+            const i = idx;
+            idx = idx + 1;
+            if (i >= current.length) {
+              return;
+            }
+            const d = current[i];
+            const ip = await DoHResolver.resolveA(d);
+            if (ip.length > 0) {
+              DoHResolver.cache.set(d, ip);
+              result[d] = ip;
+            } else if (pass === 0) {
+              remaining.push(d);
+            }
           }
-          const d = pending[idx];
-          idx = idx + 1;
-          const ip = await DoHResolver.resolveA(d);
-          if (ip.length > 0) {
-            DoHResolver.cache.set(d, ip);
-            result[d] = ip;
+        })());
+      }
+      await Promise.all(workers);
+      if (Date.now() > deadline) {
+        // 预算已尽: 剩余(含本轮未处理到的)域名放弃 pin, 记日志便于排查
+        const unpinned: string[] = remaining.slice();
+        for (const d of current) {
+          if (result[d] === undefined && !unpinned.includes(d)) {
+            unpinned.push(d);
           }
         }
-      })());
+        if (unpinned.length > 0) {
+          AppLogger.warn(TAG, `budget exhausted, unpinned: ${unpinned.slice(0, 12).join(', ')}`);
+        }
+        break;
+      }
+      pending = remaining;
+      if (pass === 0 && remaining.length > 0) {
+        AppLogger.info(TAG, `retry ${remaining.length} domains: ${remaining.slice(0, 8).join(', ')}`);
+      }
     }
-    await Promise.all(workers);
     return result;
   }
 

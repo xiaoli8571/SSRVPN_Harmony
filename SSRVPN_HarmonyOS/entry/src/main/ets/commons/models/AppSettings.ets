@@ -56,19 +56,23 @@ export class AppSettings {
 
   static fromJson(j: AppSettingsJson): AppSettings {
     const s = new AppSettings();
-    s.themeMode = j.themeMode;
-    s.autoConnectOnBoot = j.autoConnectOnBoot;
-    s.bypassDomesticApps = j.bypassDomesticApps;
-    s.excludedApps = j.excludedApps;
-    s.forceProxySites = j.forceProxySites;
-    // 兼容旧版本存档（无该字段时为 undefined, 兜底空数组）
-    s.forceDirectSites = j.forceDirectSites !== undefined ? j.forceDirectSites : [];
-    s.preferredNodeId = j.preferredNodeId;
-    s.preferredNodeSubscriptionId = j.preferredNodeSubscriptionId;
-    s.autoUpdateSubscription = j.autoUpdateSubscription;
-    s.selectedSubscriptionId = j.selectedSubscriptionId;
-    s.testLatencyUrl = j.testLatencyUrl;
-    s.proxyMode = j.proxyMode;
+    s.themeMode = j.themeMode === 1 || j.themeMode === 2 ? j.themeMode : 0;
+    s.autoConnectOnBoot = typeof j.autoConnectOnBoot === 'boolean' ? j.autoConnectOnBoot : true;
+    s.bypassDomesticApps = typeof j.bypassDomesticApps === 'boolean' ? j.bypassDomesticApps : true;
+    s.excludedApps = Array.isArray(j.excludedApps)
+      ? j.excludedApps.filter((v: string) => typeof v === 'string') : [];
+    s.forceProxySites = Array.isArray(j.forceProxySites)
+      ? j.forceProxySites.filter((v: string) => typeof v === 'string') : [];
+    s.forceDirectSites = Array.isArray(j.forceDirectSites)
+      ? j.forceDirectSites.filter((v: string) => typeof v === 'string') : [];
+    s.preferredNodeId = typeof j.preferredNodeId === 'string' ? j.preferredNodeId : '';
+    s.preferredNodeSubscriptionId = typeof j.preferredNodeSubscriptionId === 'string'
+      ? j.preferredNodeSubscriptionId : '';
+    s.autoUpdateSubscription = typeof j.autoUpdateSubscription === 'boolean' ? j.autoUpdateSubscription : true;
+    s.selectedSubscriptionId = typeof j.selectedSubscriptionId === 'string' ? j.selectedSubscriptionId : '';
+    s.testLatencyUrl = typeof j.testLatencyUrl === 'string' && j.testLatencyUrl.length > 0
+      ? j.testLatencyUrl : 'https://www.gstatic.com/generate_204';
+    s.proxyMode = j.proxyMode === 'global' ? 'global' : 'rule';
     return s;
   }
 }

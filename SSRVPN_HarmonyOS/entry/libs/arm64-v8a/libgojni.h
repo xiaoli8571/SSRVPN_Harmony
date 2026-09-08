@@ -19,7 +19,7 @@ typedef struct { const char *p; ptrdiff_t n; } _GoString_;
 /* Start of preamble from import "C" comments.  */
 
 
-#line 15 "cshared_main.go"
+#line 19 "cshared_main.go"
 
 #include <stdlib.h>
 
@@ -81,6 +81,9 @@ extern "C" {
 
 extern void SsrvpnInit(char* homeDir, char* configFile);
 extern int SsrvpnStart(char* configPath, long long tunFd);
+extern long long SsrvpnInitProtect();
+extern void SsrvpnSetProtectResult(int ok);
+extern void SsrvpnSetProtectResultForFd(long long fd, long long seq, int ok);
 extern void SsrvpnStop();
 extern int SsrvpnIsRunning();
 extern char* SsrvpnVersion();

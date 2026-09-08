@@ -65,8 +65,8 @@ export class ClashApiService {
 
   /** 健康探测（对应 MihomoApiHealthProbe）：GET /version */
   async healthProbe(): Promise<boolean> {
+    const req = http.createHttp();
     try {
-      const req = http.createHttp();
       const resp = await req.request(`${this.baseUrl()}/version`, {
         method: http.RequestMethod.GET,
         header: this.authHeader(),
@@ -74,10 +74,11 @@ export class ClashApiService {
         readTimeout: 1500,
         usingCache: false
       });
-      req.destroy();
       return resp.responseCode === 200;
     } catch (e) {
       return false;
+    } finally {
+      req.destroy();
     }
   }
 
@@ -93,8 +94,8 @@ export class ClashApiService {
 
   /** 在指定代理组选择节点: PUT /proxies/{group} {name} */
   private async selectInGroup(group: string, nodeName: string): Promise<boolean> {
+    const req = http.createHttp();
     try {
-      const req = http.createHttp();
       const headers: Record<string, string> = this.authHeader();
       headers['Content-Type'] = 'application/json';
       const payload: Record<string, string> = {};
@@ -107,18 +108,19 @@ export class ClashApiService {
         readTimeout: 3000,
         usingCache: false
       });
-      req.destroy();
       return resp.responseCode === 204 || resp.responseCode === 200;
     } catch (e) {
       AppLogger.error(TAG, `selectInGroup(${group}) failed: ${this.errText(e)}`);
       return false;
+    } finally {
+      req.destroy();
     }
   }
 
   /** 切换运行时代理模式（全局/规则）：PUT /configs（mihomo 中 PUT 与 PATCH 同为 updateConfigs） */
   async setMode(mode: string): Promise<boolean> {
+    const req = http.createHttp();
     try {
-      const req = http.createHttp();
       const headers: Record<string, string> = this.authHeader();
       headers['Content-Type'] = 'application/json';
       const payload: Record<string, string> = {};
@@ -131,18 +133,19 @@ export class ClashApiService {
         readTimeout: 3000,
         usingCache: false
       });
-      req.destroy();
       return resp.responseCode === 204 || resp.responseCode === 200;
     } catch (e) {
       AppLogger.error(TAG, `setMode failed: ${e instanceof Error ? e.message : String(e)}`);
       return false;
+    } finally {
+      req.destroy();
     }
   }
 
   /** 延迟测试（对应 clash_service_latency_support）：GET /proxies/{name}/delay */
   async testLatency(nodeName: string, testUrl: string, timeoutMs: number = 5000): Promise<number> {
+    const req = http.createHttp();
     try {
-      const req = http.createHttp();
       const resp = await req.request(
         `${this.baseUrl()}/proxies/${encodeURIComponent(nodeName)}/delay?url=${encodeURIComponent(testUrl)}&timeout=${timeoutMs}`, {
         method: http.RequestMethod.GET,
@@ -157,7 +160,6 @@ export class ClashApiService {
       } else if (resp.result instanceof ArrayBuffer) {
         body = util.TextDecoder.create('utf-8').decodeToString(new Uint8Array(resp.result));
       }
-      req.destroy();
       if (resp.responseCode === 200 && body.length > 0) {
         const json = JSON.parse(body) as Record<string, number>;
         const delay = json['delay'];
@@ -166,6 +168,8 @@ export class ClashApiService {
       return -1;
     } catch (e) {
       return -1;
+    } finally {
+      req.destroy();
     }
   }
 
@@ -196,8 +200,8 @@ export class ClashApiService {
 
   async traffic(): Promise<TrafficSnapshot> {
     const empty: TrafficSnapshot = { uploadBytes: 0, downloadBytes: 0, uploadSpeed: 0, downloadSpeed: 0 };
+    const req = http.createHttp();
     try {
-      const req = http.createHttp();
       const resp = await req.request(`${this.baseUrl()}/connections`, {
         method: http.RequestMethod.GET,
         header: this.authHeader(),
@@ -211,7 +215,6 @@ export class ClashApiService {
       } else if (resp.result instanceof ArrayBuffer) {
         body = util.TextDecoder.create('utf-8').decodeToString(new Uint8Array(resp.result));
       }
-      req.destroy();
       if (resp.responseCode !== 200 || body.length === 0) {
         return empty;
       }
@@ -249,6 +252,8 @@ export class ClashApiService {
         AppLogger.info(TAG, `traffic diag: request failed ${e instanceof Error ? e.message : String(e)}`);
       }
       return empty;
+    } finally {
+      req.destroy();
     }
   }
 

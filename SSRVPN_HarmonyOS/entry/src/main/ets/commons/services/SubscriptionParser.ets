@@ -5,9 +5,11 @@
  *                subscription_parser_naming_part.dart
  *                subscription_parser_yaml_part.dart
  *
- * 支持：ssr:// / ss:// / vless:// / vmess:// / trojan:// 单链接、Base64 批量列表、Clash YAML proxies。
+ * 支持：ssr:// / ss:// / vless:// / vmess:// / trojan:// / hysteria2://(hy2://) 单链接、
+ *       Base64 批量列表、Clash YAML proxies。
  */
 import { ProxyNode, ProxyNodeType, SsrCodec } from '../models/ProxyNode';
+import { MergedProxy, YamlMergeError, YamlMerger, YamlNodeError } from './YamlMerger';
 import { AppLogger } from '../utils/AppLogger';
 
 const TAG = 'SubscriptionParser';
@@ -16,7 +18,8 @@ export class SubscriptionParser {
   private static isProxyUri(trimmed: string): boolean {
     return trimmed.startsWith('ssr://') || trimmed.startsWith('ss://')
       || trimmed.startsWith('vless://') || trimmed.startsWith('vmess://')
-      || trimmed.startsWith('trojan://');
+      || trimmed.startsWith('trojan://') || trimmed.startsWith('hysteria2://')
+      || trimmed.startsWith('hy2://');
   }
   /**
    * 解析订阅文本，返回节点列表。
@@ -31,7 +34,10 @@ export class SubscriptionParser {
       if (node === null) {
         return;
       }
-      const key = `${node.server}:${node.port}:${node.proxyType.length > 0 ? node.proxyType : node.type}:${node.rawUri}`;
+      // 去重键须能区分"同地址不同凭据"的节点: YAML 条目无 rawUri, 只用 server:port 会
+      // 误伤共用落地服务器的多账号/多协议节点; 通知型重复后端(全字段一致)仍正常去重。
+      const key = `${node.server}:${node.port}:${node.proxyType.length > 0 ? node.proxyType : node.type}`
+        + `:${node.password}:${node.uuid}:${node.rawUri}`;
       if (seen.has(key)) {
         return;
       }
@@ -85,67 +91,61 @@ export class SubscriptionParser {
     return finalName;
   }
 
-  /**
-   * 从 Clash YAML 提取 proxies（轻量行级解析，覆盖 upstream 常见订阅格式：
-   * `- {name: x, type: ss, server: y, port: 1, cipher: z, password: w}` 以及块列表两种写法）
-   */
+  /** Clash YAML 统一复用 YamlMerger 的受限结构化解析，坏节点按条目隔离。 */
   static parseClashYaml(text: string, subscriptionId: string, startCounter: number): ProxyNode[] {
     const out: ProxyNode[] = [];
     let counter = startCounter;
-    const lines = text.split(/\r?\n/);
-    let inProxies = false;
-    for (const raw of lines) {
-      const line = raw.trim();
-      if (line === 'proxies:') {
-        inProxies = true;
+    for (const itemLines of YamlMerger.proxyItemGroups(text)) {
+      let merged: MergedProxy | null = null;
+      try {
+        merged = YamlMerger.parseProxyItem(itemLines);
+      } catch (e) {
+        if (e instanceof YamlNodeError) {
+          continue;
+        }
+        if (e instanceof YamlMergeError) {
+          throw e;
+        }
         continue;
       }
-      if (!inProxies) {
+      if (merged === null) {
         continue;
       }
-      if (line.length > 0 && !line.startsWith('-') && !line.startsWith('#') && !raw.startsWith(' ')) {
-        inProxies = false;
-        continue;
-      }
-      if (!line.startsWith('-')) {
-        continue;
-      }
-      const entry = line.substring(1).trim();
       const node = new ProxyNode();
       node.id = `${subscriptionId}-y${counter++}`;
       node.subscriptionId = subscriptionId;
-      const type = SubscriptionParser.yamlValue(entry, 'type') ?? '';
-      if (type.length === 0) {
-        continue;
-      }
-      node.proxyType = type;
-      if (type === 'ssr') {
-        node.type = ProxyNodeType.SSR;
-      } else if (type === 'ss') {
-        node.type = ProxyNodeType.SS;
-      }
-      node.name = SubscriptionParser.yamlValue(entry, 'name') ?? '';
-      node.server = SubscriptionParser.yamlValue(entry, 'server') ?? '';
-      node.port = parseInt(SubscriptionParser.yamlValue(entry, 'port') ?? '0');
-      node.method = SubscriptionParser.yamlValue(entry, 'cipher') ?? '';
-      node.password = (SubscriptionParser.yamlValue(entry, 'password') ?? '').replace(/['"]/g, '');
-      node.protocol = (SubscriptionParser.yamlValue(entry, 'protocol') ?? '').replace(/['"]/g, '');
-      node.obfs = (SubscriptionParser.yamlValue(entry, 'obfs') ?? '').replace(/['"]/g, '');
-      // 非块级写法（单行 flow-map）时保留原始条目，配置生成阶段原样透传
-      if (raw.trim().startsWith('- {') && raw.trim().endsWith('}')) {
-        node.rawYaml = raw.trim();
-      }
-      if (node.server.length > 0 && node.port > 0) {
-        out.push(node);
-      }
+      node.name = merged.name;
+      node.server = merged.server;
+      node.port = merged.port;
+      node.password = merged.password;
+      node.method = merged.cipher;
+      node.protocol = merged.protocol;
+      node.protocolParam = merged.protocolParam;
+      node.obfs = merged.obfs;
+      node.obfsParam = merged.obfsParam;
+      node.proxyType = merged.type;
+      node.type = merged.type === 'ssr' ? ProxyNodeType.SSR
+        : (merged.type === 'ss' ? ProxyNodeType.SS : ProxyNodeType.UNKNOWN);
+      node.uuid = merged.uuid;
+      node.alterId = merged.alterId;
+      node.udp = merged.udp;
+      node.network = merged.network;
+      node.tls = merged.tls;
+      node.servername = merged.servername;
+      node.skipCertVerify = merged.skipCertVerify;
+      node.flow = merged.flow;
+      node.clientFingerprint = merged.clientFingerprint;
+      node.realityPublicKey = merged.realityPublicKey;
+      node.realityShortId = merged.realityShortId;
+      node.wsPath = merged.wsPath;
+      node.wsHost = merged.wsHost;
+      node.grpcServiceName = merged.grpcServiceName;
+      node.hyUp = merged.hyUp;
+      node.hyDown = merged.hyDown;
+      node.alpnList = merged.alpnList;
+      node.rawYaml = '';
+      out.push(node);
     }
     return out;
-  }
-
-  /** 取 `key: value` 或 `key: 'value'` 的值（flow-map 与块写法通用） */
-  static yamlValue(entry: string, key: string): string | null {
-    const re = new RegExp(`${key}\\s*:\\s*([^,},]+?)(?=\\s*,|\\s*}|$)`);
-    const m = entry.match(re);
-    return m ? m[1].trim().replace(/^['"]|['"]$/g, '') : null;
   }
 }

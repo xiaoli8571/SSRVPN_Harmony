@@ -4,12 +4,16 @@
 // 构建目标: GOOS=linux GOARCH=arm64 -buildmode=c-shared, CC = OHOS NDK musl clang
 //
 // 导出 ABI（与 entry/src/main/cpp/ssrvpn_core_napi.cpp 的 dlsym 对齐）:
-//   SsrvpnInit(homeDir, configFile)             初始化内核目录
-//   SsrvpnStart(configPath, tunFd) -> int       0=成功，1=失败（错误串经 SsrvpnLastError 取）
-//   SsrvpnStop()
-//   SsrvpnIsRunning() -> int
-//   SsrvpnVersion() -> const char*
-//   SsrvpnLastError() -> const char*
+//
+//	SsrvpnInit(homeDir, configFile)             初始化内核目录
+//	SsrvpnStart(configPath, tunFd) -> int       0=成功，1=失败（错误串经 SsrvpnLastError 取）
+//	SsrvpnInitProtect() -> longlong             建立逐 fd protect 通道，返回读端 dup fd
+//	SsrvpnSetProtectResult(ok)                        兼容保留(无 seq 回执不唤醒)
+//	SsrvpnSetProtectResultForFd(fd, seq, ok)          按 seq 精确唤醒对应拨号等待者
+//	SsrvpnStop()
+//	SsrvpnIsRunning() -> int
+//	SsrvpnVersion() -> const char*
+//	SsrvpnLastError() -> const char*
 package main
 
 /*
@@ -78,6 +82,21 @@ func SsrvpnStart(configPath *C.char, tunFd C.longlong) C.int {
 	}
 	setLastErr("")
 	return 0
+}
+
+//export SsrvpnInitProtect
+func SsrvpnInitProtect() C.longlong {
+	return C.longlong(bridge.InitProtect())
+}
+
+//export SsrvpnSetProtectResult
+func SsrvpnSetProtectResult(ok C.int) {
+	bridge.SetProtectResult(ok != 0)
+}
+
+//export SsrvpnSetProtectResultForFd
+func SsrvpnSetProtectResultForFd(fd C.longlong, seq C.longlong, ok C.int) {
+	bridge.SetProtectResultForFd(uint32(fd), uint32(seq), ok != 0)
 }
 
 //export SsrvpnStop

@@ -14,6 +14,7 @@ import type Want from '@ohos.app.ability.Want';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { notificationManager } from '@kit.NotificationKit';
 import { util } from '@kit.ArkTS';
+import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { coreBridge } from '../../core/CoreBridge';
 import { ClashApiService, TrafficSnapshot } from './ClashApiService';
 import { ClashConfigGenerator } from './ClashConfigGenerator';
@@ -250,7 +251,13 @@ export class ConnectionOrchestrator {
       if (savedSecret.length > 0) {
         this.apiSecret = savedSecret;
       } else {
-        this.apiSecret = `ssr-${Math.random().toString(36).substring(2, 14)}`;
+        const random = cryptoFramework.createRandom();
+        const randomBlob = await random.generateRandom(24);
+        let randomHex = '';
+        for (const value of randomBlob.data) {
+          randomHex += value.toString(16).padStart(2, '0');
+        }
+        this.apiSecret = `ssr-${randomHex}`;
         await SettingsService.setApiSecret(this.apiSecret);
       }
 
@@ -262,7 +269,7 @@ export class ConnectionOrchestrator {
       // 隧道自身, 探测会误报"有 IPv6"。
       try {
         const stopWant: Want = {
-          bundleName: 'com.ssrvpn.harmonyos',
+          bundleName: 'com.ssrvpn.client',
           abilityName: 'VpnExtensionAbility'
         };
         await vpnExtension.stopVpnExtensionAbility(stopWant);
@@ -290,9 +297,9 @@ export class ConnectionOrchestrator {
       }
 
       // ── 代理服务器域名防投毒解析(UI 进程, 此刻 VPN 未起、网络干净) ──
-      // 明文 UDP DNS 会把代理域名投毒成假 IP → 内核拨假地址全线超时 → 连上但
-      // 打不开任何网站。这里用 DoH 预解析所有节点入口域名, 结果写进 YAML hosts:,
-      // 内核直接命中真实 IP。带缓存 + 5s 全局预算, 不会明显拖慢连接。
+      // 明文 UDP DNS 会往代理域名的应答里追加假记录, 内核拨假地址全线超时。
+      // 用 DoH 预解析所有节点入口域名(与权威应答验证一致), 结果写进 YAML hosts:,
+      // 内核直接命中真实 IP。带缓存 + 6s 全局预算 + 失败二轮重试。
       const serverDomains: string[] = [];
       for (const n of subs.nodes) {
         const s = n.server;
@@ -303,18 +310,32 @@ export class ConnectionOrchestrator {
       }
       let proxyHosts: Record<string, string> = {};
       try {
-        proxyHosts = await DoHResolver.resolveMany(serverDomains, 5000);
+        proxyHosts = await DoHResolver.resolveMany(serverDomains, 6000);
       } catch (e) {
         AppLogger.warn(TAG, `DoH pre-resolve failed: ${e instanceof Error ? e.message : String(e)}`);
       }
       AppLogger.info(TAG, `DoH pinned ${Object.keys(proxyHosts).length}/${serverDomains.length} proxy servers`);
+      const unpinnedDomains: string[] = [];
+      for (const d of serverDomains) {
+        if (proxyHosts[d.toLowerCase()] === undefined) {
+          unpinnedDomains.push(d);
+        }
+      }
+      if (unpinnedDomains.length > 0) {
+        // 未 pin 的域名运行期回退 proxy-server-nameserver(明文 UDP, 有被投毒风险),
+        // 点名记录便于排查"个别节点不通"类问题。
+        AppLogger.warn(TAG, `unpinned servers: ${unpinnedDomains.slice(0, 12).join(', ')}`);
+      }
 
       const yaml = ClashConfigGenerator.generate(target, subs.nodes, settings, MIXED_PORT, API_PORT,
         this.apiSecret, useGeoip, this.ipv6Active, proxyHosts);
       const configPath = `${this.context.cacheDir}/${CONFIG_FILE}`;
       const file = fs.openSync(configPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
-      fs.writeSync(file.fd, yaml);
-      fs.closeSync(file);
+      try {
+        fs.writeSync(file.fd, yaml);
+      } finally {
+        fs.closeSync(file);
+      }
       AppLogger.info(TAG, `config written: ${configPath} (${yaml.length} bytes)`);
       this.clearStartError();
 
@@ -325,7 +346,7 @@ export class ConnectionOrchestrator {
       // bypassPackages: 强制不走代理的应用包名(VpnConfig.blockedApplications,
       //   框架层直接让这些 App 的流量绕过隧道走物理网络)。
       const want: Want = {
-        bundleName: 'com.ssrvpn.harmonyos',
+        bundleName: 'com.ssrvpn.client',
         abilityName: 'VpnExtensionAbility',
         parameters: {
           configPath: configPath,
@@ -398,10 +419,21 @@ export class ConnectionOrchestrator {
       }
       return true;
     } catch (e) {
+      const errorMessage = e instanceof Error ? e.message : String(e);
+      try {
+        await this.disconnectInternal();
+      } catch (cleanupError) {
+        AppLogger.warn(TAG, `connect rollback failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+      }
       this.state = ConnState.DISCONNECTED;
-      this.lastError = `${e}`;
+      this.startedAt = 0;
+      this.ipv6Active = false;
+      this.traffic = { uploadBytes: 0, downloadBytes: 0, uploadSpeed: 0, downloadSpeed: 0 };
+      this.api.resetTrafficBaseline();
+      this.api.setEndpoint(API_PORT, '');
+      this.lastError = errorMessage;
       this.notify();
-      AppLogger.error(TAG, `connect failed: ${e}`);
+      AppLogger.error(TAG, `connect failed: ${errorMessage}`);
       return false;
     }
   }
@@ -491,7 +523,7 @@ export class ConnectionOrchestrator {
     }
     try {
       const want: Want = {
-        bundleName: 'com.ssrvpn.harmonyos',
+        bundleName: 'com.ssrvpn.client',
         abilityName: 'VpnExtensionAbility'
       };
       await vpnExtension.stopVpnExtensionAbility(want);

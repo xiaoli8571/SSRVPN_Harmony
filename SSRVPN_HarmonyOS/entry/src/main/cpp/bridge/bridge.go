@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/netip"
 	"os"
 	"runtime"
 	"sync"
@@ -36,48 +35,102 @@ var (
 	protectStopRequests  atomic.Int32
 )
 
-const protectResultTimeout = 5 * time.Second
-
-var (
-	errProtectStopped  = errors.New("protect monitor stopped")
-	errProtectTimedOut = errors.New("protect monitor timed out")
-)
-
+// protectSession 是内核出站 socket 的逐 fd protect 通道。
+//
+// 语义（v3, 2026-09）: 真机实证两条红线 ——
+//  1. 顺序红线: 本机 protectProcessNet() 对 Go 线程创建的 socket 不生效(调用
+//     "成功"但 socket 依然走 VPN 路由)。connect 抢在 protect 标记前发生 → SYN
+//     回灌 TUN → 内核再拨同一地址 → 自激递归 → 53 秒打爆 fd 表(EMFILE)、core.log
+//     涨 4MB, 全线节点瘫痪。所以必须"等 protect 回执再放行 connect"。
+//  2. 活性红线: 旧实现"单请求串行 + 5s 超时 + 超时退役会话", 连接风暴下排队超
+//     dial 预算(i/o timeout), 一次退役永久失联(protect monitor unavailable,
+//     "连上但全部打不开")。所以必须并发等待 + 短超时 + 失败放行(fail-open)、
+//     永不退役。
+//
+// 实现: 写 fd 后按 FIFO 排队等回执, 单次等待上限 protectWaitTimeout(800ms),
+// 超时/失败一律放行拨号(最坏该条连接进环, 有 dial 超时兜底, 不拖垮全局)。
 type protectSession struct {
-	result     chan bool
 	done       chan struct{}
 	cancelOnce sync.Once
 	requestMu  sync.Mutex
 	writer     *os.File
+	writerFd   int
+	warnedOnce bool
+
+	waitMu  sync.Mutex
+	waiters map[uint32]*protectWaiter // key: seq(回显), 不是 fd —— fd 号在 close 后会复用
+	seq     atomic.Uint32
 }
+
+type protectWaiter struct {
+	ch chan struct{} // 关闭即唤醒; 一次性, 无并发发送竞态
+}
+
+// protectWaitTimeout 是 protect 回执的最长等待。正常路径(ArkTS 10ms 轮询批量
+// 排空 + protect IPC ~10-50ms, 并发处理)在几十毫秒内返回; 800ms 覆盖 ~1600/s
+// 排空速率下的深队列, 超过即视为扩展进程失能, 放行拨号(fail-open)。
+const protectWaitTimeout = 800 * time.Millisecond
 
 func newProtectSession() *protectSession {
 	return &protectSession{
-		result: make(chan bool),
-		done:   make(chan struct{}),
+		done:     make(chan struct{}),
+		writerFd: -1,
+		waiters:  map[uint32]*protectWaiter{},
 	}
 }
 
-func (session *protectSession) wait(timeout time.Duration) (bool, error) {
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case ok := <-session.result:
-		return ok, nil
-	case <-session.done:
-		return false, errProtectStopped
-	case <-timer.C:
-		return false, errProtectTimedOut
+// registerWaiter 登记等待者并返回其 seq(8 字节记录 fd+seq 的协议: 回执按 seq
+// 精确配对, 规避 fd 关闭复用后的错号唤醒)。
+func (session *protectSession) registerWaiter() (*protectWaiter, uint32) {
+	entry := &protectWaiter{ch: make(chan struct{})}
+	seq := session.seq.Add(1)
+	session.waitMu.Lock()
+	session.waiters[seq] = entry
+	session.waitMu.Unlock()
+	return entry, seq
+}
+
+func (session *protectSession) removeWaiter(seq uint32) {
+	session.waitMu.Lock()
+	delete(session.waiters, seq)
+	session.waitMu.Unlock()
+}
+
+// completeWaiter 唤醒登记在 seq 上的等待者(close 一次性, 无并发发送竞态)。
+// 未登记/已超时(回执晚到)的 seq 直接丢弃。
+func (session *protectSession) completeWaiter(seq uint32, _ bool) {
+	session.waitMu.Lock()
+	entry := session.waiters[seq]
+	if entry != nil {
+		delete(session.waiters, seq)
+	}
+	session.waitMu.Unlock()
+	if entry != nil {
+		close(entry.ch)
 	}
 }
 
-func (session *protectSession) report(ok bool) bool {
-	select {
-	case session.result <- ok:
-		return true
-	case <-session.done:
-		return false
+func (session *protectSession) dropAllWaiters() {
+	session.waitMu.Lock()
+	waiters := session.waiters
+	session.waiters = map[uint32]*protectWaiter{}
+	session.waitMu.Unlock()
+	for _, entry := range waiters {
+		close(entry.ch)
 	}
+}
+
+// closeWriter 安全关闭管道写端: 与 protectSocket 的裸 syscall.Write 共用
+// requestMu 串行化, 并先把 writerFd 置 -1 —— 杜绝"关闭后 fd 号被其他文件复用,
+// 迟到的写入落到无关文件"的经典 fd 复用竞态。
+func (session *protectSession) closeWriter() {
+	session.requestMu.Lock()
+	session.writerFd = -1
+	if session.writer != nil {
+		_ = session.writer.Close()
+		session.writer = nil
+	}
+	session.requestMu.Unlock()
 }
 
 func (session *protectSession) active() bool {
@@ -132,9 +185,8 @@ func retireProtectSession(session *protectSession) {
 	}
 	protectSessionMu.Unlock()
 	session.cancel()
-	if session.writer != nil {
-		_ = session.writer.Close()
-	}
+	session.dropAllWaiters()
+	session.closeWriter()
 }
 
 func protectReadyForStart(tunFd int64) bool {
@@ -148,59 +200,82 @@ func protectReadyForStart(tunFd int64) bool {
 	return session != nil && session.writer == protectWrite && session.active()
 }
 
+// protectSocket 在 connect() 之前把 (fd, seq) 记录交给 ArkTS 去 protect, 并按
+// seq 精确等待自己的回执(上限 protectWaitTimeout)。不同拨号并发等待互不排队;
+// 超时/失败一律放行(fail-open): 单条连接最坏进环由 dial 超时兜底, 不拖垮全局。
 func protectSocket(_ string, _ string, connection syscall.RawConn) error {
 	session := currentProtectSession()
 	if session == nil {
-		return fmt.Errorf("protect monitor is unavailable")
+		return nil
 	}
 
-	session.requestMu.Lock()
-	defer session.requestMu.Unlock()
-	if !session.active() {
-		return fmt.Errorf("protect monitor stopped")
-	}
-
-	var protectError error
-	controlError := connection.Control(func(fd uintptr) {
-		if !session.active() {
-			protectError = fmt.Errorf("protect monitor stopped for fd %d", fd)
-			return
-		}
-		var encoded [4]byte
-		binary.LittleEndian.PutUint32(encoded[:], uint32(fd))
-		if _, err := session.writer.Write(encoded[:]); err != nil {
-			protectError = err
-			return
-		}
-		ok, err := session.wait(protectResultTimeout)
-		if err != nil {
-			if errors.Is(err, errProtectTimedOut) {
-				// A late response cannot be matched to its request. Retire the
-				// whole session so it cannot be delivered to a later socket.
-				retireProtectSession(session)
+	var entry *protectWaiter
+	var waitFd uint32
+	var waitSeq uint32
+	controlErr := connection.Control(func(fd uintptr) {
+		session.requestMu.Lock()
+		notified := session.active() && session.writerFd >= 0
+		var writeErr error
+		if notified {
+			waitFd = uint32(fd)
+			// 先登记再写管道: 回执只可能在写入之后到达。requestMu 保证
+			// 单条 8 字节记录原子写入, 不会被拆散。
+			entry, waitSeq = session.registerWaiter()
+			var encoded [8]byte
+			binary.LittleEndian.PutUint32(encoded[0:4], waitFd)
+			binary.LittleEndian.PutUint32(encoded[4:8], waitSeq)
+			for {
+				_, writeErr = syscall.Write(session.writerFd, encoded[:])
+				if writeErr == nil || !errors.Is(writeErr, syscall.EINTR) {
+					break
+				}
 			}
-			protectError = fmt.Errorf("%w for fd %d", err, fd)
-		} else if !ok {
-			protectError = fmt.Errorf("protect failed for fd %d", fd)
+			if writeErr != nil {
+				session.removeWaiter(waitSeq)
+				entry = nil
+				if !session.warnedOnce {
+					session.warnedOnce = true
+					log.Warnln("Bridge: protect notify dropped fd %d: %v (further drops silent)", fd, writeErr)
+				}
+			}
 		}
+		session.requestMu.Unlock()
 	})
-	if controlError != nil {
-		return controlError
+	if controlErr != nil {
+		// protect 通道问题绝不使能拨号失败: 记日志放行, 由 dial 自身超时兜底
+		log.Warnln("Bridge: protect control error: %v", controlErr)
+		return nil
 	}
-	return protectError
+	if entry == nil {
+		return nil
+	}
+	timer := time.NewTimer(protectWaitTimeout)
+	defer timer.Stop()
+	select {
+	case <-entry.ch:
+		// 回执到达(或被整体清理): 该 fd 的 protect 已被框架处理, 放行 connect
+	case <-session.done:
+		// 会话停止(重连/断开中): 立即放行
+	case <-timer.C:
+		session.removeWaiter(waitSeq)
+		log.Warnln("Bridge: protect grace expired for fd %d seq %d, dialing fail-open", waitFd, waitSeq)
+	}
+	return nil
 }
 
 // releaseProtectLocked must be called while coreMu is held.
 func releaseProtectLocked() {
+	session := currentProtectSession()
 	replaceProtectSession(nil)
-	if protectWrite != nil {
-		_ = protectWrite.Close()
-		protectWrite = nil
+	if session != nil {
+		session.dropAllWaiters()
+		session.closeWriter()
 	}
 	if protectRead != nil {
 		_ = protectRead.Close()
 		protectRead = nil
 	}
+	protectWrite = nil
 }
 
 func Init(homeDir, configFile string) {
@@ -248,26 +323,26 @@ func Start(configPath string, tunFd int64) (result string) {
 	}
 
 	if tunFd > 0 {
+		// Preserve the TUN network parameters generated by ClashConfigGenerator.
+		// VpnExtensionAbility and the YAML are the source of truth for the
+		// 172.19.0.1/30, optional IPv6, and MTU 1400 configuration. Only inject
+		// the descriptor and settings that are specific to the native bridge.
 		cfg.General.Tun.Enable = true
 		cfg.General.Tun.Stack = C.TunGvisor
 		cfg.General.Tun.FileDescriptor = int(tunFd)
 		cfg.General.Tun.DNSHijack = []string{"any:53"}
 		cfg.General.Tun.AutoRoute = false
 		cfg.General.Tun.AutoDetectInterface = false
-		cfg.General.Tun.MTU = 1500
-		cfg.General.Tun.Inet4Address = []netip.Prefix{
-			netip.MustParsePrefix("10.0.0.2/32"),
-		}
-		log.Infoln("Bridge: TUN fd=%d, address=10.0.0.2/32", tunFd)
+		log.Infoln("Bridge: TUN descriptor attached; network parameters preserved from config")
 	} else {
-		log.Infoln("Bridge: no TUN fd (tunFd=%d), running without TUN", tunFd)
+		log.Infoln("Bridge: running without TUN")
 	}
 
 	if !protectReadyForStart(tunFd) {
 		return "protect monitor is unavailable"
 	}
 	if tunFd > 0 {
-		log.Infoln("Bridge: protect hook installed (sync)")
+		log.Infoln("Bridge: protect notify channel installed (advisory, non-blocking)")
 	}
 
 	hub.ApplyConfig(cfg)
@@ -340,6 +415,14 @@ func InitProtect() int64 {
 	releaseProtectLocked()
 	session := newProtectSession()
 	session.writer = writePipe
+	// Fd() 把写端切到 raw 模式并显式置 O_NONBLOCK: protectSocket 的裸 syscall.Write
+	// 在队列满时立即 EAGAIN 返回, 绝不阻塞拨号协程。
+	writeFd := int(writePipe.Fd())
+	if err := syscall.SetNonblock(writeFd, true); err != nil {
+		log.Warnln("Bridge: protect write pipe nonblock failed: %v", err)
+	} else {
+		session.writerFd = writeFd
+	}
 	if !installProtectSession(session) {
 		_ = readPipe.Close()
 		_ = writePipe.Close()
@@ -370,11 +453,21 @@ func InitProtect() int64 {
 	return int64(transferFd)
 }
 
-func SetProtectResult(ok bool) {
+// SetProtectResultForFd 由 ArkTS 在 connection.protect(fd) 落定后回调, 回显
+// 管道记录里的 seq, 精确唤醒对应拨号协程。ok=false 同样唤醒(fail-open)。
+// fd 仅作日志/诊断用 —— 配对必须用 seq, fd 号会在 socket 关闭后被复用。
+func SetProtectResultForFd(fd uint32, seq uint32, ok bool) {
+	if seq == 0 {
+		return
+	}
 	if session := currentProtectSession(); session != nil {
-		session.report(ok)
+		session.completeWaiter(seq, ok)
 	}
 }
+
+// SetProtectResult 兼容旧导出符号(napi dlsym 依赖存在该符号)。
+// v3 语义下必须携带 fd 才能精确配对, 旧无 fd 回执无法唤醒任何等待者, 仅保留符号。
+func SetProtectResult(_ bool) {}
 
 func init() {
 	dialer.DefaultSocketHook = protectSocket

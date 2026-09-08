@@ -4,6 +4,7 @@
  *                packages/ssrvpn_shared/lib/services/public_ip_info_service.dart
  */
 import { http } from '@kit.NetworkKit';
+import { util } from '@kit.ArkTS';
 import { PublicIpInfo } from '../models/PublicIpInfo';
 
 export interface CountryDef {
@@ -60,30 +61,44 @@ export class NodeCountryPolicy {
 }
 
 export class PublicIpService {
-  /** 查询当前出口公网 IP（ip-api 无鉴权接口，与 upstream 的查询行为等价） */
+  /** 查询当前出口公网 IP（ip-api 免费版仅支持 HTTP，HTTPS 是付费 pro 端点，用 https 会 TLS 失败） */
   static async query(): Promise<PublicIpInfo> {
     const info = PublicIpInfo.empty();
+    const req = http.createHttp();
     try {
-      const req = http.createHttp();
       const resp = await req.request('http://ip-api.com/json/?fields=query,country,countryCode,city,isp', {
         method: http.RequestMethod.GET,
         connectTimeout: 5000,
         readTimeout: 8000,
         usingCache: false
       });
-      const body = resp.result as string;
-      req.destroy();
-      if (resp.responseCode === 200) {
+      const maxResponseBytes = 64 * 1024;
+      let body = '';
+      if (typeof resp.result === 'string') {
+        const encoded = util.TextEncoder.create('utf-8').encodeInto(resp.result);
+        if (encoded.length > maxResponseBytes) {
+          return info;
+        }
+        body = resp.result;
+      } else if (resp.result instanceof ArrayBuffer) {
+        if (resp.result.byteLength > maxResponseBytes) {
+          return info;
+        }
+        body = util.TextDecoder.create('utf-8').decodeToString(new Uint8Array(resp.result));
+      }
+      if (resp.responseCode === 200 && body.length > 0) {
         const json = JSON.parse(body) as Record<string, Object>;
-        info.ip = json['query'] as string ?? '';
-        info.country = json['country'] as string ?? '';
-        info.countryCode = json['countryCode'] as string ?? '';
-        info.city = json['city'] as string ?? '';
-        info.isp = json['isp'] as string ?? '';
+        info.ip = typeof json['query'] === 'string' ? json['query'] as string : '';
+        info.country = typeof json['country'] === 'string' ? json['country'] as string : '';
+        info.countryCode = typeof json['countryCode'] === 'string' ? json['countryCode'] as string : '';
+        info.city = typeof json['city'] === 'string' ? json['city'] as string : '';
+        info.isp = typeof json['isp'] === 'string' ? json['isp'] as string : '';
         info.queryTime = Date.now();
       }
     } catch (e) {
       // 失败返回空对象，由 UI 呈现"获取失败"
+    } finally {
+      req.destroy();
     }
     return info;
   }

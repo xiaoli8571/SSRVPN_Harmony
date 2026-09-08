@@ -11,8 +11,8 @@ const RELEASES_API = 'https://api.github.com/repos/Elegying/SSRVPN/releases/late
 export class UpdateChecker {
   /** 返回最新版本号；无更新或网络失败返回 '' */
   static async latestVersion(): Promise<string> {
+    const req = http.createHttp();
     try {
-      const req = http.createHttp();
       const headers: Record<string, string> = {};
       headers['User-Agent'] = 'SSRVPN-HarmonyOS';
       const resp = await req.request(RELEASES_API, {
@@ -28,7 +28,6 @@ export class UpdateChecker {
       } else if (resp.result instanceof ArrayBuffer) {
         body = util.TextDecoder.create('utf-8').decodeToString(new Uint8Array(resp.result));
       }
-      req.destroy();
       if (resp.responseCode !== 200 || body.length === 0) {
         return '';
       }
@@ -37,6 +36,8 @@ export class UpdateChecker {
       return tag !== undefined ? UpdateChecker.normalize(tag) : '';
     } catch (e) {
       return '';
+    } finally {
+      req.destroy();
     }
   }
 

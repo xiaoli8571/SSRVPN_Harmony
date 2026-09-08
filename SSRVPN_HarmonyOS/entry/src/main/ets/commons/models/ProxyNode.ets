@@ -23,10 +23,29 @@ export class ProxyNode {
   obfs: string = '';
   obfsParam: string = '';
   type: ProxyNodeType = ProxyNodeType.UNKNOWN;
-  /** 真实代理类型字符串（vless/vmess/trojan/ss/ssr…），用于展示与配置生成 */
+  /** 真实代理类型字符串（vless/vmess/trojan/ss/ssr），用于展示与安全配置生成。 */
   proxyType: string = '';
-  /** 原始 Clash YAML 代理条目（多行文本，含 name）；生成内核配置时优先原样透传，
-   *  以完整保留 vmess/vless/trojan 等全部字段（uuid/reality-opts/ws-opts 等） */
+  /** 现代协议白名单结构化字段。rawYaml 仅为旧存储兼容占位，禁止信任或输出。 */
+  uuid: string = '';
+  alterId: number = 0;
+  udp: boolean = false;
+  network: string = '';
+  tls: boolean = false;
+  servername: string = '';
+  skipCertVerify: boolean = false;
+  flow: string = '';
+  clientFingerprint: string = '';
+  realityPublicKey: string = '';
+  realityShortId: string = '';
+  wsPath: string = '';
+  wsHost: string = '';
+  grpcServiceName: string = '';
+  /** Hysteria2 (QUIC) 专属：带宽 up/down (Mbps)、口令混淆、ALPN。
+   *  复用字段: password=认证口令, servername=sni, skipCertVerify=insecure,
+   *  obfs=salamander/gecko, obfsParam=obfs-password, clientFingerprint=pinSHA256。 */
+  hyUp: string = '';
+  hyDown: string = '';
+  alpnList: string = '';
   rawYaml: string = '';
   rawUri: string = '';
   groupName: string = '';
@@ -47,6 +66,12 @@ export class ProxyNode {
     }
     if (trimmed.startsWith('trojan://')) {
       return ModernUriCodec.parseTrojan(trimmed.substring(9), subscriptionId, id);
+    }
+    if (trimmed.startsWith('hysteria2://')) {
+      return ModernUriCodec.parseHysteria2(trimmed.substring(12), subscriptionId, id);
+    }
+    if (trimmed.startsWith('hy2://')) {
+      return ModernUriCodec.parseHysteria2(trimmed.substring(6), subscriptionId, id);
     }
     return null;
   }
@@ -256,9 +281,9 @@ export class SsrCodec {
 }
 
 /**
- * 现代代理链接编解码（vless:// / vmess:// / trojan://）
- * 解析 URI 并生成可直接写入 Mihomo proxies: 分节的单条 YAML（rawYaml 透传），
- * 保证 uuid / reality-opts / ws-opts / grpc-opts 等字段完整保留。
+ * 现代代理链接编解码（vless:// / vmess:// / trojan:// / hysteria2:// / hy2://）
+ * 解析现代代理 URI，并将 Mihomo 所需字段保存到白名单结构化模型中。
+ * rawYaml 仅保留为旧存储兼容占位，不参与配置生成或透传。
  */
 export class ModernUriCodec {
   /** YAML 字符串值转义（双引号包裹） */
@@ -322,10 +347,44 @@ export class ModernUriCodec {
     if (node.name.length === 0) {
       node.name = node.server;
     }
-    if (node.server.length === 0 || isNaN(node.port) || node.port <= 0 || node.port >= 65536) {
+    const texts: string[] = [node.name, node.server, node.password, node.method, node.protocol,
+      node.protocolParam, node.obfs, node.obfsParam, node.uuid, node.network, node.servername,
+      node.flow, node.clientFingerprint, node.realityPublicKey, node.realityShortId, node.wsPath,
+      node.wsHost, node.grpcServiceName, node.hyUp, node.hyDown, node.alpnList];
+    for (const value of texts) {
+      if (!ModernUriCodec.isSafeText(value)) {
+        return null;
+      }
+    }
+    if (node.name.length === 0 || node.server.length === 0 || !/^([A-Za-z0-9.-]+|[0-9A-Fa-f:]+)$/.test(node.server)
+      || node.server.includes('..') || node.server.startsWith('.') || node.server.endsWith('.')
+      || isNaN(node.port) || !Number.isInteger(node.port) || node.port <= 0 || node.port >= 65536
+      || node.alterId < 0 || !Number.isInteger(node.alterId)) {
+      return null;
+    }
+    if ((node.proxyType === 'vless' || node.proxyType === 'vmess')
+      && !/^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-5][0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$/.test(node.uuid)) {
+      return null;
+    }
+    if (node.network.length > 0 && node.network !== 'tcp' && node.network !== 'ws'
+      && node.network !== 'grpc' && node.network !== 'http' && node.network !== 'h2') {
       return null;
     }
     return node;
+  }
+
+  private static isSafeText(value: string): boolean {
+    if (value.length > 64 * 1024 || value.includes('\n') || value.includes('\r')
+      || value.includes('\u0000')) {
+      return false;
+    }
+    for (let i = 0; i < value.length; i++) {
+      const code = value.charCodeAt(i);
+      if (code < 0x20 || code === 0x7f) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /** vless://uuid@host:port?type=tcp&security=reality&flow=...&sni=...&pbk=...&sid=...#name */
@@ -356,49 +415,6 @@ export class ModernUriCodec {
     const wsPath = query.get('path') ?? '';
     const serviceName = query.get('serviceName') ?? '';
 
-    const fields: string[] = [];
-    fields.push('type: vless');
-    fields.push(`server: ${host}`);
-    fields.push(`port: ${port}`);
-    fields.push(`uuid: ${ModernUriCodec.q(uuid)}`);
-    fields.push('udp: true');
-    fields.push(`network: ${network}`);
-    if (security === 'tls' || security === 'reality') {
-      fields.push('tls: true');
-    }
-    if (flow.length > 0) {
-      fields.push(`flow: ${ModernUriCodec.q(flow)}`);
-    }
-    if (sni.length > 0) {
-      fields.push(`servername: ${ModernUriCodec.q(sni)}`);
-    }
-    if (fp.length > 0) {
-      fields.push(`client-fingerprint: ${ModernUriCodec.q(fp)}`);
-    }
-    if (security === 'reality' && pbk.length > 0) {
-      const realityParts: string[] = [];
-      realityParts.push(`public-key: ${ModernUriCodec.q(pbk)}`);
-      if (sid.length > 0) {
-        realityParts.push(`short-id: ${ModernUriCodec.q(sid)}`);
-      }
-      fields.push(`reality-opts: {${realityParts.join(', ')}}`);
-    }
-    if (network === 'ws') {
-      const wsParts: string[] = [];
-      if (wsPath.length > 0) {
-        wsParts.push(`path: ${ModernUriCodec.q(wsPath)}`);
-      }
-      if (wsHost.length > 0) {
-        wsParts.push(`headers: {Host: ${ModernUriCodec.q(wsHost)}}`);
-      }
-      if (wsParts.length > 0) {
-        fields.push(`ws-opts: {${wsParts.join(', ')}}`);
-      }
-    }
-    if (network === 'grpc' && serviceName.length > 0) {
-      fields.push(`grpc-opts: {grpc-service-name: ${ModernUriCodec.q(serviceName)}}`);
-    }
-
     const node = new ProxyNode();
     node.id = id;
     node.subscriptionId = subscriptionId;
@@ -407,8 +423,26 @@ export class ModernUriCodec {
     node.port = port;
     node.type = ProxyNodeType.UNKNOWN;
     node.proxyType = 'vless';
+    node.uuid = uuid;
+    node.udp = true;
+    node.network = network;
+    node.tls = security === 'tls' || security === 'reality';
+    node.flow = flow;
+    node.servername = sni;
+    node.clientFingerprint = fp;
+    if (security === 'reality') {
+      node.realityPublicKey = pbk;
+      node.realityShortId = sid;
+    }
+    if (network === 'ws') {
+      node.wsPath = wsPath;
+      node.wsHost = wsHost;
+    }
+    if (network === 'grpc') {
+      node.grpcServiceName = serviceName;
+    }
     node.rawUri = 'vless://' + body;
-    node.rawYaml = `- {name: ${ModernUriCodec.q(name.length > 0 ? name : host)}, ${fields.join(', ')}}`;
+    node.rawYaml = '';
     return ModernUriCodec.finish(node);
   }
 
@@ -444,34 +478,6 @@ export class ModernUriCodec {
     const tls = (json['tls'] ?? '') as string;
     const sni = (json['sni'] ?? '') as string;
 
-    const fields: string[] = [];
-    fields.push('type: vmess');
-    fields.push(`server: ${add}`);
-    fields.push(`port: ${port}`);
-    fields.push(`uuid: ${ModernUriCodec.q(uuid)}`);
-    fields.push(`alterId: ${isNaN(aid) ? 0 : aid}`);
-    fields.push(`cipher: ${ModernUriCodec.q(scy.length > 0 ? scy : 'auto')}`);
-    fields.push('udp: true');
-    fields.push(`network: ${net}`);
-    if (tls === 'tls') {
-      fields.push('tls: true');
-    }
-    if (sni.length > 0) {
-      fields.push(`servername: ${ModernUriCodec.q(sni)}`);
-    }
-    if (net === 'ws') {
-      const wsParts: string[] = [];
-      if (path.length > 0) {
-        wsParts.push(`path: ${ModernUriCodec.q(path)}`);
-      }
-      if (host.length > 0) {
-        wsParts.push(`headers: {Host: ${ModernUriCodec.q(host)}}`);
-      }
-      if (wsParts.length > 0) {
-        fields.push(`ws-opts: {${wsParts.join(', ')}}`);
-      }
-    }
-
     const node = new ProxyNode();
     node.id = id;
     node.subscriptionId = subscriptionId;
@@ -480,8 +486,19 @@ export class ModernUriCodec {
     node.port = port;
     node.type = ProxyNodeType.UNKNOWN;
     node.proxyType = 'vmess';
+    node.uuid = uuid;
+    node.alterId = isNaN(aid) ? 0 : aid;
+    node.method = scy.length > 0 ? scy : 'auto';
+    node.udp = true;
+    node.network = net;
+    node.tls = tls === 'tls';
+    node.servername = sni;
+    if (net === 'ws') {
+      node.wsPath = path;
+      node.wsHost = host;
+    }
     node.rawUri = 'vmess://' + body;
-    node.rawYaml = `- {name: ${ModernUriCodec.q(ps.length > 0 ? ps : add)}, ${fields.join(', ')}}`;
+    node.rawYaml = '';
     return ModernUriCodec.finish(node);
   }
 
@@ -504,19 +521,6 @@ export class ModernUriCodec {
     const sni = query.get('sni') ?? '';
     const allowInsecure = query.get('allowInsecure') ?? '0';
 
-    const fields: string[] = [];
-    fields.push('type: trojan');
-    fields.push(`server: ${host}`);
-    fields.push(`port: ${port}`);
-    fields.push(`password: ${ModernUriCodec.q(password)}`);
-    fields.push('udp: true');
-    if (sni.length > 0) {
-      fields.push(`sni: ${ModernUriCodec.q(sni)}`);
-    }
-    if (allowInsecure === '1' || allowInsecure.toLowerCase() === 'true') {
-      fields.push('skip-cert-verify: true');
-    }
-
     const node = new ProxyNode();
     node.id = id;
     node.subscriptionId = subscriptionId;
@@ -526,8 +530,71 @@ export class ModernUriCodec {
     node.password = password;
     node.type = ProxyNodeType.UNKNOWN;
     node.proxyType = 'trojan';
+    node.udp = true;
+    node.tls = true;
+    node.servername = sni;
+    node.skipCertVerify = allowInsecure === '1' || allowInsecure.toLowerCase() === 'true';
     node.rawUri = 'trojan://' + body;
-    node.rawYaml = `- {name: ${ModernUriCodec.q(name.length > 0 ? name : host)}, ${fields.join(', ')}}`;
+    node.rawYaml = '';
+    return ModernUriCodec.finish(node);
+  }
+
+  /** 带宽值规整（Hysteria2 up/down）: 仅接受 数字[单位]，如 "114"、"0.5Mbps"；非法则丢弃 */
+  static normalizeHyBandwidth(value: string): string {
+    const v = value.trim();
+    if (v.length === 0) {
+      return '';
+    }
+    return /^[0-9]+(\.[0-9]+)?[A-Za-z]{0,6}$/.test(v) ? v : '';
+  }
+
+  /** ALPN 规整: "h3,h4" / ["h3"] / [h3] → "h3,h4"；仅保留 alpn-h2/http/1.1/h3 等安全字符 */
+  static normalizeAlpn(value: string): string {
+    const cleaned = value.replace(/[\[\]"\s]/g, '');
+    if (cleaned.length === 0) {
+      return '';
+    }
+    return /^[A-Za-z0-9.,-]+$/.test(cleaned) ? cleaned : '';
+  }
+
+  /** hysteria2://(hy2://)password@host:port/?insecure=1&sni=..&obfs=salamander&obfs-password=..&up=..&down=..&alpn=h3&pinSHA256=..#name */
+  static parseHysteria2(body: string, subscriptionId: string, id: string): ProxyNode | null {
+    const parts = ModernUriCodec.splitUri(body);
+    const working = parts[0];
+    const query = ModernUriCodec.parseQuery(parts[1]);
+    const name = parts[2];
+    const hostInfo = ModernUriCodec.splitHostPort(working);
+    if (hostInfo.length < 3) {
+      return null;
+    }
+    const password = SsrCodec.percentDecode(hostInfo[0]);
+    const host = hostInfo[1];
+    const port = parseInt(hostInfo[2]);
+    if (password.length === 0) {
+      return null;
+    }
+    const insecure = (query.get('insecure') ?? '0').toLowerCase();
+
+    const node = new ProxyNode();
+    node.id = id;
+    node.subscriptionId = subscriptionId;
+    node.name = name;
+    node.server = host;
+    node.port = port;
+    node.password = password;
+    node.type = ProxyNodeType.UNKNOWN;
+    node.proxyType = 'hysteria2';
+    node.udp = true;
+    node.servername = query.get('sni') ?? '';
+    node.skipCertVerify = insecure === '1' || insecure === 'true';
+    node.obfs = query.get('obfs') ?? '';
+    node.obfsParam = query.get('obfs-password') ?? '';
+    node.clientFingerprint = query.get('pinSHA256') ?? '';
+    node.hyUp = ModernUriCodec.normalizeHyBandwidth(query.get('up') ?? '');
+    node.hyDown = ModernUriCodec.normalizeHyBandwidth(query.get('down') ?? '');
+    node.alpnList = ModernUriCodec.normalizeAlpn(query.get('alpn') ?? '');
+    node.rawUri = 'hysteria2://' + body;
+    node.rawYaml = '';
     return ModernUriCodec.finish(node);
   }
 }

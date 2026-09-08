@@ -99,6 +99,7 @@ struct SiteListDialog {
 struct NodeSelectionPage {
   @State nodes: NodeRow[] = [];
   @State filterSubId: string = ''; // '' = 全部
+  private listScroller: Scroller = new Scroller();
   @State subChips: SubChip[] = []; // 响应式订阅筛选列表（onPageShow 异步加载后刷新）
   @State selectedName: string = '';
   @State testingName: string = '';
@@ -185,7 +186,23 @@ struct NodeSelectionPage {
     if (this.filterSubId.length > 0 && !this.subs.subscriptions.some((s) => s.id === this.filterSubId)) {
       this.filterSubId = '';
     }
+    // 进入页面自动定位到当前节点所属订阅（"全部"是初始态而非用户主动选择时）：
+    // 修复"每次进来都停在全部列表、要手动找节点"的体验问题。
+    if (this.filterSubId.length === 0 && this.settings.preferredNodeId.length > 0) {
+      const cur = this.subs.findNode(this.settings.preferredNodeId);
+      if (cur !== null && cur.subscriptionId.length > 0 && cur.subscriptionId !== 'direct'
+        && this.subs.subscriptions.some((s) => s.id === cur.subscriptionId)) {
+        this.filterSubId = cur.subscriptionId;
+      }
+    }
     this.rebuildRows();
+    // 定位到当前选中节点行（等 nodes 状态驱动的 List 完成构建再滚动）
+    const selectedIndex = this.nodes.findIndex((r) => r.node.name === this.selectedName);
+    if (selectedIndex > 0) {
+      setTimeout(() => {
+        this.listScroller.scrollToIndex(selectedIndex, true);
+      }, 350);
+    }
     LatencyController.addListener(() => {
       this.latencyTick = this.latencyTick + 1;
     });
@@ -236,11 +253,15 @@ struct NodeSelectionPage {
     }
     this.testingName = node.name;
     const delay = await this.testNodeDelay(node);
-    LatencyController.set(node.name, delay);
+    if (delay !== -2) { // -2 = 协议不支持离线测试, 保持"未测试"态
+      LatencyController.set(node.name, delay);
+    }
     this.testingName = '';
   }
 
-  /** 未连接时走直连 TCP 握手测速(内核未启动 API 不存在), 已连接时走 Clash API(经代理真实路径) */
+  /** 未连接时走直连测速(内核未启动 API 不存在): TCP 握手 / hy2 QUIC Initial 探测,
+   *  tester 返回 -2 表示该节点协议无法离线探测(如带 obfs 的 hy2), 保持未测试态。
+   *  已连接时走 Clash API(经代理真实路径)。 */
   private async testNodeDelay(node: ProxyNode): Promise<number> {
     if (!this.isConnected) {
       return DirectLatencyTester.testNode(node);
@@ -257,7 +278,9 @@ struct NodeSelectionPage {
     for (const n of list) {
       this.testingName = n.name;
       const delay = await this.testNodeDelay(n);
-      LatencyController.set(n.name, delay);
+      if (delay !== -2) {
+        LatencyController.set(n.name, delay);
+      }
     }
     this.testingName = '';
     this.batchTesting = false;
@@ -458,7 +481,7 @@ struct NodeSelectionPage {
           .width('100%')
           .margin({ top: 120 })
         } else {
-          List({ space: 7 }) {
+          List({ space: 7, scroller: this.listScroller }) {
             ForEach(this.nodes, (row: NodeRow) => {
               ListItem() {
                 this.NodeCard(row)

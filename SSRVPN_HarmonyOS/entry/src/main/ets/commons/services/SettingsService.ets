@@ -55,27 +55,29 @@ export class SettingsService {
     await SettingsService.store.flush();
   }
 
-  /** apiSecret 加密存储（AssetStoreKit；失败时降级明文偏好并记日志） */
+  /** apiSecret 只允许存入系统加密 AssetStore，禁止降级到明文 Preferences。 */
   static async setApiSecret(secret: string): Promise<void> {
+    const attr: asset.AssetMap = new Map<asset.Tag, asset.Value>();
+    attr.set(asset.Tag.SECRET, stringToUint8(secret));
+    attr.set(asset.Tag.ALIAS, stringToUint8(ASSET_SECRET_KEY));
+    attr.set(asset.Tag.ACCESSIBILITY, asset.Accessibility.DEVICE_FIRST_UNLOCKED);
     try {
-      const attr: asset.AssetMap = new Map<asset.Tag, asset.Value>();
-      attr.set(asset.Tag.SECRET, stringToUint8(secret));
-      attr.set(asset.Tag.ALIAS, stringToUint8(ASSET_SECRET_KEY));
-      attr.set(asset.Tag.ACCESSIBILITY, asset.Accessibility.DEVICE_FIRST_UNLOCKED);
-      try {
-        await asset.remove(attr);
-      } catch (e) {
-        // 首次写入前不存在属正常
-      }
-      await asset.add(attr);
-      AppLogger.info(TAG, 'apiSecret stored in asset store');
+      await asset.remove(attr);
     } catch (e) {
-      AppLogger.warn(TAG, `asset store failed, fallback to prefs: ${e instanceof Error ? e.message : String(e)}`);
-      if (SettingsService.store !== null) {
-        await SettingsService.store.put('api_secret_fallback', secret);
+      // 首次写入前不存在属正常
+    }
+    await asset.add(attr);
+
+    // 清除旧版本可能遗留的明文回退值。
+    if (SettingsService.store !== null) {
+      try {
+        await SettingsService.store.delete('api_secret_fallback');
         await SettingsService.store.flush();
+      } catch (cleanupError) {
+        AppLogger.warn(TAG, `failed to remove legacy api secret fallback: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
       }
     }
+    AppLogger.info(TAG, 'apiSecret stored in asset store');
   }
 
   static async getApiSecret(): Promise<string> {
@@ -93,9 +95,7 @@ export class SettingsService {
       }
       return '';
     } catch (e) {
-      if (SettingsService.store !== null) {
-        return await SettingsService.store.get('api_secret_fallback', '') as string;
-      }
+      AppLogger.warn(TAG, `asset store query failed: ${e instanceof Error ? e.message : String(e)}`);
       return '';
     }
   }

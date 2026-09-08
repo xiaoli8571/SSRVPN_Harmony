@@ -6,7 +6,7 @@ import { router, promptAction } from '@kit.ArkUI';
 import { util } from '@kit.ArkTS';
 import { Ui } from '../theme/UiTokens';
 import { ProxyNode, ProxyNodeType } from '../commons/models/ProxyNode';
-import { SubscriptionService } from '../commons/services/SubscriptionService';
+import { ManualNodeStore } from '../commons/services/SubscriptionService';
 import { SettingsService } from '../commons/services/SettingsService';
 
 @Entry
@@ -20,15 +20,14 @@ struct NodeEditPage {
   @State protocol: string = 'origin';
   @State obfs: string = 'plain';
   @State rawImport: string = '';
-  private subs: SubscriptionService = new SubscriptionService();
-
   onPageShow(): void {
     this.bootstrap();
   }
 
   private async bootstrap(): Promise<void> {
-    await SettingsService.init(getContext(this) as Context);
-    await this.subs.init(getContext(this) as Context);
+    const context = getContext(this) as Context;
+    await SettingsService.init(context);
+    await ManualNodeStore.init(context);
   }
 
   /** 从 ssr:// / ss:// 链接一键导入（对应 subscription_node_editor 的导入行为） */
@@ -66,11 +65,13 @@ struct NodeEditPage {
     node.protocolParam = '';
     node.obfs = this.obfs;
     node.obfsParam = '';
-    const added = await this.subs.addDirectNode(node.rawUri.length > 0 ? node.rawUri : `ssr://${node.server}`);
-    if (added === -1) {
+    const duplicate = ManualNodeStore.all().some((existing: ProxyNode) =>
+      existing.server === node.server && existing.port === node.port && existing.type === node.type);
+    if (duplicate) {
       promptAction.showToast({ message: '该节点已存在' });
       return;
     }
+    await ManualNodeStore.addNode(node);
     promptAction.showToast({ message: '节点已保存' });
     router.back();
   }

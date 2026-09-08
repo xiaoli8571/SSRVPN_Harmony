@@ -11,7 +11,7 @@
  */
 import { util } from '@kit.ArkTS';
 
-/** 单个合并后的代理节点（ss/ssr 标量字段 + 原始 YAML 条目透传） */
+/** 单个合并后的代理节点，仅保存受支持协议（ss/ssr/vless/vmess/trojan/hysteria2）的白名单结构化字段。 */
 export class MergedProxy {
   name: string = '';
   type: string = 'ss';
@@ -23,8 +23,24 @@ export class MergedProxy {
   protocolParam: string = '';
   obfs: string = '';
   obfsParam: string = '';
-  /** 原始 proxies 条目（含缩进的多行文本）；vmess/vless/trojan 等类型依赖它生成正确配置 */
-  rawYaml: string = '';
+  uuid: string = '';
+  alterId: number = 0;
+  udp: boolean = false;
+  network: string = '';
+  tls: boolean = false;
+  servername: string = '';
+  skipCertVerify: boolean = false;
+  flow: string = '';
+  clientFingerprint: string = '';
+  realityPublicKey: string = '';
+  realityShortId: string = '';
+  wsPath: string = '';
+  wsHost: string = '';
+  grpcServiceName: string = '';
+  /** Hysteria2: up/down 带宽(Mbps 字符串)、alpn 逗号列表；obfs 族复用 obfs/obfsParam 槽位 */
+  hyUp: string = '';
+  hyDown: string = '';
+  alpnList: string = '';
 }
 
 /** 合并限额（照抄 upstream SubscriptionYamlMerger 常量） */
@@ -37,6 +53,13 @@ export class MergeLimits {
 }
 
 export class YamlMergeError extends Error {
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+/** 单个节点格式或必需字段错误。合并时跳过该节点，不吞掉任何全局限额错误。 */
+export class YamlNodeError extends Error {
   constructor(message: string) {
     super(message);
   }
@@ -124,9 +147,199 @@ export class YamlMerger {
     return items;
   }
 
+  /** 按 YAML 引号和花括号/方括号深度切分 flow-map 字段；数组值(alpn:[h3,h2])容忍并保留。 */
+  private static splitFlowMap(content: string): string[] {
+    const out: string[] = [];
+    let current = '';
+    let quote = '';
+    let escaped = false;
+    let braceDepth = 0;
+    let bracketDepth = 0;
+    for (let i = 0; i < content.length; i++) {
+      const ch = content.charAt(i);
+      if (quote === '"' && escaped) {
+        current += ch;
+        escaped = false;
+        continue;
+      }
+      if (quote === '"' && ch === '\\') {
+        current += ch;
+        escaped = true;
+        continue;
+      }
+      if (quote.length > 0) {
+        current += ch;
+        if (ch === quote) {
+          quote = '';
+        }
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        quote = ch;
+        current += ch;
+      } else if (ch === '{') {
+        braceDepth = braceDepth + 1;
+        current += ch;
+      } else if (ch === '}') {
+        if (braceDepth <= 0) {
+          throw new YamlNodeError('代理节点包含多余的右花括号');
+        }
+        braceDepth = braceDepth - 1;
+        current += ch;
+      } else if (ch === '[') {
+        bracketDepth = bracketDepth + 1;
+        current += ch;
+      } else if (ch === ']') {
+        if (bracketDepth <= 0) {
+          throw new YamlNodeError('代理节点包含多余的右方括号');
+        }
+        bracketDepth = bracketDepth - 1;
+        current += ch;
+      } else if (ch === ',' && braceDepth === 0 && bracketDepth === 0) {
+        if (current.trim().length > 0) {
+          out.push(current.trim());
+        }
+        current = '';
+      } else {
+        current += ch;
+      }
+    }
+    if (quote.length > 0 || escaped || braceDepth !== 0 || bracketDepth !== 0) {
+      throw new YamlNodeError('代理节点包含未闭合的 YAML 引号或集合');
+    }
+    if (current.trim().length > 0) {
+      out.push(current.trim());
+    }
+    return out;
+  }
+
+  /** 查找不在引号内的字段分隔冒号。 */
+  private static findUnquotedColon(value: string): number {
+    let quote = '';
+    let escaped = false;
+    for (let i = 0; i < value.length; i++) {
+      const ch = value.charAt(i);
+      if (quote === '"' && escaped) {
+        escaped = false;
+        continue;
+      }
+      if (quote === '"' && ch === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (quote.length > 0) {
+        if (ch === quote) {
+          quote = '';
+        }
+      } else if (ch === '"' || ch === "'") {
+        quote = ch;
+      } else if (ch === ':') {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  /** 解码受限 YAML 标量，拒绝标签、锚点、注释、换行和集合语法。 */
+  private static decodeScalar(input: string): string {
+    const value = input.trim();
+    if (value.length === 0) {
+      return '';
+    }
+    if (value.includes('\n') || value.includes('\r') || value.startsWith('!')
+      || value.startsWith('&') || value.startsWith('*') || value.startsWith('|')
+      || value.startsWith('>') || value.startsWith('[') || value.startsWith('{')) {
+      throw new YamlNodeError('代理节点包含不受支持的 YAML 标量');
+    }
+    const first = value.charAt(0);
+    if (first === '"' || first === "'") {
+      if (value.length < 2 || value.charAt(value.length - 1) !== first) {
+        throw new YamlNodeError('代理节点包含未闭合的 YAML 引号');
+      }
+      let inner = value.substring(1, value.length - 1);
+      if (first === "'") {
+        return inner.replace(/''/g, "'");
+      }
+      inner = inner.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+      return inner;
+    }
+    // 裸标量里的 " #" 之后是 YAML 行内注释, 截掉; 值本身含 '#'(如密码)则保留
+    const commentIdx = value.indexOf(' #');
+    if (commentIdx >= 0) {
+      return value.substring(0, commentIdx).trim();
+    }
+    return value;
+  }
+
+  /** 解析受限 flow-map，并确保只有指定键；嵌套值仍由调用方按白名单解析。 */
+  private static parseRestrictedFlowMap(input: string, allowedKeys: Set<string>): Map<string, string> {
+    const value = input.trim();
+    if (!value.startsWith('{') || !value.endsWith('}')) {
+      throw new YamlNodeError('代理节点嵌套字段必须使用合法 flow-map');
+    }
+    const result = new Map<string, string>();
+    const pairs = YamlMerger.splitFlowMap(value.substring(1, value.length - 1));
+    for (const pair of pairs) {
+      const idx = YamlMerger.findUnquotedColon(pair);
+      if (idx <= 0) {
+        throw new YamlNodeError('代理节点嵌套 flow-map 字段格式无效');
+      }
+      const key = YamlMerger.decodeScalar(pair.substring(0, idx));
+      if (!allowedKeys.has(key) || result.has(key)) {
+        throw new YamlNodeError(`代理节点包含未知或重复嵌套字段：${key}`);
+      }
+      result.set(key, pair.substring(idx + 1).trim());
+    }
+    return result;
+  }
+
+  private static parseNestedOptions(fields: Map<string, string>, p: MergedProxy): void {
+    const realityRaw = fields.get('reality-opts');
+    if (realityRaw !== undefined) {
+      const reality = YamlMerger.parseRestrictedFlowMap(realityRaw,
+        new Set<string>(['public-key', 'short-id']));
+      p.realityPublicKey = YamlMerger.decodeScalar(reality.get('public-key') ?? '');
+      p.realityShortId = YamlMerger.decodeScalar(reality.get('short-id') ?? '');
+    }
+    const wsRaw = fields.get('ws-opts');
+    if (wsRaw !== undefined) {
+      const ws = YamlMerger.parseRestrictedFlowMap(wsRaw, new Set<string>(['path', 'headers']));
+      p.wsPath = YamlMerger.decodeScalar(ws.get('path') ?? '');
+      const headersRaw = ws.get('headers');
+      if (headersRaw !== undefined) {
+        const headers = YamlMerger.parseRestrictedFlowMap(headersRaw, new Set<string>(['Host']));
+        p.wsHost = YamlMerger.decodeScalar(headers.get('Host') ?? '');
+      }
+    }
+    const grpcRaw = fields.get('grpc-opts');
+    if (grpcRaw !== undefined) {
+      const grpc = YamlMerger.parseRestrictedFlowMap(grpcRaw,
+        new Set<string>(['grpc-service-name']));
+      p.grpcServiceName = YamlMerger.decodeScalar(grpc.get('grpc-service-name') ?? '');
+    }
+  }
+
+  private static parseBoolean(value: string, fieldName: string): boolean {
+    // 容错: true/1/yes → true; 其余(含缺失/异常值) → false, 绝不因布尔字段丢弃节点
+    const normalized = value.toLowerCase().trim();
+    return normalized === 'true' || normalized === '1' || normalized === 'yes';
+  }
+
+  private static validateNodeText(value: string, fieldName: string): void {
+    if (value.length > MergeLimits.MAX_PROXY_FIELD_LENGTH) {
+      throw new YamlMergeError(`订阅字段 ${fieldName} 长度超过上限 (64KB)`);
+    }
+    for (let i = 0; i < value.length; i++) {
+      const code = value.charCodeAt(i);
+      if (code < 0x20 || code === 0x7f) {
+        throw new YamlNodeError(`代理节点字段 ${fieldName} 包含控制字符`);
+      }
+    }
+  }
+
   /**
-   * 解析单个 proxies 条目（替代 upstream BoundedYaml.load 的流式解析）：
-   * 支持 flow-map（`- {k: v, ...}`）与块列表（`- k: v` 续行）两种写法。
+   * 解析单个 proxies 条目。仅接受白名单标量及 reality/ws/grpc 白名单嵌套结构；
+   * 节点格式错误抛出 YamlNodeError，由 merge 跳过；全局限额仍抛出 YamlMergeError。
    */
   static parseProxyItem(itemLines: string[]): MergedProxy | null {
     const text = itemLines.join('\n').trim();
@@ -134,78 +347,347 @@ export class YamlMerger {
       throw new YamlMergeError('单个节点内容大小超过上限');
     }
     const fields = new Map<string, string>();
+    const supportedKeys = new Set<string>([
+      'name', 'type', 'server', 'port', 'cipher', 'password',
+      'protocol', 'protocol-param', 'protocol_param', 'obfs', 'obfs-param', 'obfs_param',
+      'uuid', 'alterId', 'alter-id', 'udp', 'network', 'tls', 'servername', 'sni',
+      'skip-cert-verify', 'flow', 'client-fingerprint', 'reality-opts', 'ws-opts', 'grpc-opts',
+      'up', 'down', 'alpn', 'obfs-password', 'fingerprint'
+    ]);
     const body = text.startsWith('- ') ? text.substring(2) : text;
     if (body.trimStart().startsWith('{')) {
-      // flow-map：按逗号切顶层（值内不含裸 { }，覆盖 ss/ssr 常见字段）
       const inner = body.trim();
-      const content = inner.substring(inner.indexOf('{') + 1, inner.lastIndexOf('}'));
-      for (const pair of content.split(',')) {
-        const idx = pair.indexOf(':');
-        if (idx < 0) {
+      if (!inner.endsWith('}')) {
+        throw new YamlNodeError('代理节点 flow-map 未闭合');
+      }
+      const content = inner.substring(inner.indexOf('{') + 1, inner.length - 1);
+      const pairs = YamlMerger.splitFlowMap(content);
+      for (const pair of pairs) {
+        const idx = YamlMerger.findUnquotedColon(pair);
+        if (idx <= 0) {
+          continue; // 无法识别的片段, 忽略该字段(不丢弃整个节点)
+        }
+        let key = '';
+        try {
+          key = YamlMerger.decodeScalar(pair.substring(0, idx).trim());
+        } catch (e) {
           continue;
         }
-        const key = pair.substring(0, idx).trim().replace(/^['"]|['"]$/g, '');
-        const value = pair.substring(idx + 1).trim().replace(/^['"]|['"]$/g, '');
-        if (key.length > 0) {
-          fields.set(key, value);
+        // 未知字段/重复字段一律忽略：真实 Clash YAML 常带 alpn、ip-version、tfo 等
+        // 白名单外字段, 不能因此丢弃整个可用节点。
+        if (key.length === 0 || !supportedKeys.has(key) || fields.has(key)) {
+          continue;
+        }
+        const rawValue = pair.substring(idx + 1).trim();
+        if (key === 'reality-opts' || key === 'ws-opts' || key === 'grpc-opts' || key === 'alpn') {
+          fields.set(key, rawValue);
+        } else {
+          try {
+            fields.set(key, YamlMerger.decodeScalar(rawValue));
+          } catch (e) {
+            // 值解析失败, 跳过该字段
+          }
         }
       }
     } else {
-      // 块写法：- key: value
       for (const line of itemLines) {
         const t = line.trim().replace(/^- /, '');
-        const idx = t.indexOf(':');
-        if (idx < 0) {
+        if (t.length === 0 || t.startsWith('#') || t.startsWith('- ')) {
+          continue; // 空行/注释/数组子项, 跳过
+        }
+        const idx = YamlMerger.findUnquotedColon(t);
+        if (idx <= 0) {
+          continue; // 非 key:value 行, 忽略
+        }
+        let key = '';
+        try {
+          key = YamlMerger.decodeScalar(t.substring(0, idx).trim());
+        } catch (e) {
           continue;
         }
-        const key = t.substring(0, idx).trim();
-        const value = t.substring(idx + 1).trim().replace(/^['"]|['"]$/g, '');
-        if (key.length > 0) {
-          fields.set(key, value);
+        // 未知/重复字段忽略, 不因白名单外字段丢弃可用节点
+        if (key.length === 0 || !supportedKeys.has(key) || fields.has(key)) {
+          continue;
+        }
+        const rawValue = t.substring(idx + 1).trim();
+        if (key === 'reality-opts' || key === 'ws-opts' || key === 'grpc-opts' || key === 'alpn') {
+          fields.set(key, rawValue);
+        } else {
+          try {
+            fields.set(key, YamlMerger.decodeScalar(rawValue));
+          } catch (e) {
+            // 值解析失败, 跳过该字段
+          }
         }
       }
     }
     const name = fields.get('name') ?? '';
     const server = fields.get('server') ?? '';
     const portStr = fields.get('port') ?? '0';
-    if (name.length === 0 || server.length === 0) {
-      return null;
+    const proxyType = (fields.get('type') ?? '').toLowerCase();
+    if (name.length === 0 || server.length === 0 || proxyType.length === 0) {
+      throw new YamlNodeError('代理节点缺少 name、type 或 server');
+    }
+    if (proxyType !== 'ss' && proxyType !== 'ssr' && proxyType !== 'vless'
+      && proxyType !== 'vmess' && proxyType !== 'trojan' && proxyType !== 'hysteria2') {
+      throw new YamlNodeError(`不支持的代理类型：${proxyType}`);
+    }
+    if (!/^\d{1,5}$/.test(portStr)) {
+      throw new YamlNodeError('代理节点端口格式无效');
+    }
+    const portNum = parseInt(portStr);
+    if (portNum <= 0 || portNum > 65535) {
+      throw new YamlNodeError('代理节点端口超出范围');
     }
     const p = new MergedProxy();
     p.name = name;
-    p.type = fields.get('type') ?? 'ss';
+    p.type = proxyType;
     p.server = server;
-    const portNum = parseInt(portStr);
-    p.port = isNaN(portNum) ? 0 : portNum;
+    p.port = portNum;
     p.cipher = fields.get('cipher') ?? '';
     p.password = fields.get('password') ?? '';
     p.protocol = fields.get('protocol') ?? '';
     p.protocolParam = fields.get('protocol-param') ?? fields.get('protocol_param') ?? '';
     p.obfs = fields.get('obfs') ?? '';
     p.obfsParam = fields.get('obfs-param') ?? fields.get('obfs_param') ?? '';
-    // 保留原始条目（含 flow-map 与块写法），供配置生成阶段完整透传全部字段
-    p.rawYaml = itemLines.join('\n');
+    // hysteria2 的混淆口令键名是 obfs-password，与 ssr 的 obfs-param 复用同一槽位，
+    // 序列化时按类型区分输出键名。
+    if (p.obfsParam.length === 0) {
+      p.obfsParam = fields.get('obfs-password') ?? '';
+    }
+    p.uuid = fields.get('uuid') ?? '';
+    const alterIdText = fields.get('alterId') ?? fields.get('alter-id') ?? '0';
+    if (!/^\d{1,10}$/.test(alterIdText)) {
+      throw new YamlNodeError('代理节点 alterId 格式无效');
+    }
+    p.alterId = parseInt(alterIdText);
+    p.udp = YamlMerger.parseBoolean(fields.get('udp') ?? 'false', 'udp');
+    p.network = fields.get('network') ?? '';
+    p.tls = YamlMerger.parseBoolean(fields.get('tls') ?? 'false', 'tls');
+    p.servername = fields.get('servername') ?? fields.get('sni') ?? '';
+    p.skipCertVerify = YamlMerger.parseBoolean(fields.get('skip-cert-verify') ?? 'false',
+      'skip-cert-verify');
+    p.flow = fields.get('flow') ?? '';
+    p.clientFingerprint = fields.get('client-fingerprint') ?? '';
+    if (p.clientFingerprint.length === 0) {
+      // hysteria2 的证书指纹(pinSHA256)键名是 fingerprint
+      p.clientFingerprint = fields.get('fingerprint') ?? '';
+    }
+    if (proxyType === 'hysteria2') {
+      p.hyUp = YamlMerger.normalizeBandwidth(fields.get('up') ?? '');
+      p.hyDown = YamlMerger.normalizeBandwidth(fields.get('down') ?? '');
+      p.alpnList = YamlMerger.normalizeAlpnList(fields.get('alpn') ?? '');
+    }
+    try {
+      YamlMerger.parseNestedOptions(fields, p);
+    } catch (e) {
+      // reality-opts/ws-opts/grpc-opts 结构异常时忽略嵌套项, 不丢弃整个节点
+      if (e instanceof YamlMergeError) {
+        throw e;
+      }
+    }
+    const values: string[] = [p.name, p.server, p.cipher, p.password, p.protocol, p.protocolParam,
+      p.obfs, p.obfsParam, p.uuid, p.network, p.servername, p.flow, p.clientFingerprint,
+      p.realityPublicKey, p.realityShortId, p.wsPath, p.wsHost, p.grpcServiceName,
+      p.hyUp, p.hyDown, p.alpnList];
+    for (let i = 0; i < values.length; i++) {
+      YamlMerger.validateNodeText(values[i], `field-${i}`);
+    }
+    if ((p.type === 'ss' || p.type === 'ssr') && (p.cipher.length === 0 || p.password.length === 0)) {
+      throw new YamlNodeError(`代理节点「${p.name}」缺少 cipher 或 password`);
+    }
+    if (p.type === 'ssr' && (p.protocol.length === 0 || p.obfs.length === 0)) {
+      throw new YamlNodeError(`SSR 节点「${p.name}」缺少 protocol 或 obfs`);
+    }
+    if ((p.type === 'vless' || p.type === 'vmess') && p.uuid.length === 0) {
+      throw new YamlNodeError(`代理节点「${p.name}」缺少 uuid`);
+    }
+    if (p.type === 'vmess' && p.cipher.length === 0) {
+      throw new YamlNodeError(`VMess 节点「${p.name}」缺少 cipher`);
+    }
+    if (p.type === 'trojan' && p.password.length === 0) {
+      throw new YamlNodeError(`Trojan 节点「${p.name}」缺少 password`);
+    }
+    if (p.type === 'hysteria2' && p.password.length === 0) {
+      throw new YamlNodeError(`Hysteria2 节点「${p.name}」缺少 password`);
+    }
     return p;
   }
 
-  /** 内容指纹：除 name 外全部字段按 key 排序后 JSON（对齐 _proxyIdentityContent） */
-  static identityFingerprint(p: MergedProxy): string {
-    const obj: Record<string, string | number> = {};
-    obj['type'] = p.type;
-    obj['server'] = p.server;
-    obj['port'] = p.port;
-    obj['cipher'] = p.cipher;
-    obj['password'] = p.password;
-    obj['protocol'] = p.protocol;
-    obj['protocolParam'] = p.protocolParam;
-    obj['obfs'] = p.obfs;
-    obj['obfsParam'] = p.obfsParam;
-    const keys = Object.keys(obj).sort();
-    const parts: string[] = [];
-    for (const k of keys) {
-      parts.push(`"${k}":${JSON.stringify(obj[k])}`);
+  /** 带宽值规整（Hysteria2 up/down）: 仅接受 数字[单位]；非法则丢弃 */
+  static normalizeBandwidth(value: string): string {
+    const v = value.trim();
+    if (v.length === 0) {
+      return '';
     }
-    return `{${parts.join(',')}}`;
+    return /^[0-9]+(\.[0-9]+)?[A-Za-z]{0,6}$/.test(v) ? v : '';
+  }
+
+  /** ALPN 规整: ["h3","h4"] / [h3] / h3,h4 → "h3,h4"；含非法字符则整体丢弃 */
+  static normalizeAlpnList(value: string): string {
+    const cleaned = value.replace(/[\[\]"\s']/g, '');
+    if (cleaned.length === 0) {
+      return '';
+    }
+    return /^[A-Za-z0-9.,-]+$/.test(cleaned) ? cleaned : '';
+  }
+
+  /** 内容指纹：除 name 外包含全部协议及白名单嵌套字段。 */
+  static identityFingerprint(p: MergedProxy): string {
+    const parts: string[] = [];
+    parts.push(`type=${JSON.stringify(p.type)}`);
+    parts.push(`server=${JSON.stringify(p.server)}`);
+    parts.push(`port=${p.port}`);
+    parts.push(`cipher=${JSON.stringify(p.cipher)}`);
+    parts.push(`password=${JSON.stringify(p.password)}`);
+    parts.push(`protocol=${JSON.stringify(p.protocol)}`);
+    parts.push(`protocolParam=${JSON.stringify(p.protocolParam)}`);
+    parts.push(`obfs=${JSON.stringify(p.obfs)}`);
+    parts.push(`obfsParam=${JSON.stringify(p.obfsParam)}`);
+    parts.push(`uuid=${JSON.stringify(p.uuid)}`);
+    parts.push(`alterId=${p.alterId}`);
+    parts.push(`udp=${p.udp ? 'true' : 'false'}`);
+    parts.push(`network=${JSON.stringify(p.network)}`);
+    parts.push(`tls=${p.tls ? 'true' : 'false'}`);
+    parts.push(`servername=${JSON.stringify(p.servername)}`);
+    parts.push(`skipCertVerify=${p.skipCertVerify ? 'true' : 'false'}`);
+    parts.push(`flow=${JSON.stringify(p.flow)}`);
+    parts.push(`clientFingerprint=${JSON.stringify(p.clientFingerprint)}`);
+    parts.push(`realityPublicKey=${JSON.stringify(p.realityPublicKey)}`);
+    parts.push(`realityShortId=${JSON.stringify(p.realityShortId)}`);
+    parts.push(`wsPath=${JSON.stringify(p.wsPath)}`);
+    parts.push(`wsHost=${JSON.stringify(p.wsHost)}`);
+    parts.push(`grpcServiceName=${JSON.stringify(p.grpcServiceName)}`);
+    parts.push(`hyUp=${JSON.stringify(p.hyUp)}`);
+    parts.push(`hyDown=${JSON.stringify(p.hyDown)}`);
+    parts.push(`alpn=${JSON.stringify(p.alpnList)}`);
+    return parts.join('|');
+  }
+
+  /** 将结构化节点安全序列化为可回读的 Clash YAML，绝不拼接原始 YAML。 */
+  static toYaml(proxies: MergedProxy[]): string {
+    const lines: string[] = ['proxies:'];
+    for (const p of proxies) {
+      const fields: string[] = [];
+      fields.push(`name: ${YamlMerger.encodeScalar(p.name)}`);
+      fields.push(`type: ${YamlMerger.encodeScalar(p.type)}`);
+      fields.push(`server: ${YamlMerger.encodeScalar(p.server)}`);
+      fields.push(`port: ${p.port}`);
+      if (p.cipher.length > 0) {
+        fields.push(`cipher: ${YamlMerger.encodeScalar(p.cipher)}`);
+      }
+      if (p.password.length > 0) {
+        fields.push(`password: ${YamlMerger.encodeScalar(p.password)}`);
+      }
+      if (p.protocol.length > 0) {
+        fields.push(`protocol: ${YamlMerger.encodeScalar(p.protocol)}`);
+      }
+      if (p.protocolParam.length > 0) {
+        fields.push(`protocol-param: ${YamlMerger.encodeScalar(p.protocolParam)}`);
+      }
+      if (p.obfs.length > 0) {
+        fields.push(`obfs: ${YamlMerger.encodeScalar(p.obfs)}`);
+      }
+      if (p.obfsParam.length > 0) {
+        // hysteria2 用 obfs-password 键，ssr 用 obfs-param 键（同一槽位）
+        fields.push(`${p.type === 'hysteria2' ? 'obfs-password' : 'obfs-param'}: ${YamlMerger.encodeScalar(p.obfsParam)}`);
+      }
+      if (p.uuid.length > 0) {
+        fields.push(`uuid: ${YamlMerger.encodeScalar(p.uuid)}`);
+      }
+      if (p.type === 'vmess') {
+        fields.push(`alterId: ${p.alterId}`);
+      }
+      if (p.udp) {
+        fields.push('udp: true');
+      }
+      if (p.network.length > 0) {
+        fields.push(`network: ${YamlMerger.encodeScalar(p.network)}`);
+      }
+      if (p.tls) {
+        fields.push('tls: true');
+      }
+      if (p.servername.length > 0) {
+        // hysteria2 的 SNI 键名是 sni（无 servername 选项）
+        fields.push(`${p.type === 'hysteria2' ? 'sni' : 'servername'}: ${YamlMerger.encodeScalar(p.servername)}`);
+      }
+      if (p.skipCertVerify) {
+        fields.push('skip-cert-verify: true');
+      }
+      if (p.flow.length > 0) {
+        fields.push(`flow: ${YamlMerger.encodeScalar(p.flow)}`);
+      }
+      if (p.clientFingerprint.length > 0) {
+        fields.push(`${p.type === 'hysteria2' ? 'fingerprint' : 'client-fingerprint'}: ${YamlMerger.encodeScalar(p.clientFingerprint)}`);
+      }
+      if (p.type === 'hysteria2') {
+        if (p.hyUp.length > 0) {
+          fields.push(`up: ${YamlMerger.encodeScalar(p.hyUp)}`);
+        }
+        if (p.hyDown.length > 0) {
+          fields.push(`down: ${YamlMerger.encodeScalar(p.hyDown)}`);
+        }
+        if (p.alpnList.length > 0) {
+          const items = p.alpnList.split(',');
+          const flowItems: string[] = [];
+          for (const it of items) {
+            flowItems.push(YamlMerger.encodeScalar(it));
+          }
+          fields.push(`alpn: [${flowItems.join(', ')}]`);
+        }
+      }
+      if (p.realityPublicKey.length > 0 || p.realityShortId.length > 0) {
+        const reality: string[] = [];
+        if (p.realityPublicKey.length > 0) {
+          reality.push(`public-key: ${YamlMerger.encodeScalar(p.realityPublicKey)}`);
+        }
+        if (p.realityShortId.length > 0) {
+          reality.push(`short-id: ${YamlMerger.encodeScalar(p.realityShortId)}`);
+        }
+        fields.push(`reality-opts: {${reality.join(', ')}}`);
+      }
+      if (p.wsPath.length > 0 || p.wsHost.length > 0) {
+        const ws: string[] = [];
+        if (p.wsPath.length > 0) {
+          ws.push(`path: ${YamlMerger.encodeScalar(p.wsPath)}`);
+        }
+        if (p.wsHost.length > 0) {
+          ws.push(`headers: {Host: ${YamlMerger.encodeScalar(p.wsHost)}}`);
+        }
+        fields.push(`ws-opts: {${ws.join(', ')}}`);
+      }
+      if (p.grpcServiceName.length > 0) {
+        fields.push(`grpc-opts: {grpc-service-name: ${YamlMerger.encodeScalar(p.grpcServiceName)}}`);
+      }
+      lines.push(`  - {${fields.join(', ')}}`);
+    }
+    return lines.join('\n') + '\n';
+  }
+
+  /** YAML 双引号标量编码，覆盖反斜杠、引号及所有控制字符。 */
+  private static encodeScalar(value: string): string {
+    let out = '"';
+    for (let i = 0; i < value.length; i++) {
+      const ch = value.charAt(i);
+      const code = value.charCodeAt(i);
+      if (ch === '\\') {
+        out += '\\\\';
+      } else if (ch === '"') {
+        out += '\\"';
+      } else if (ch === '\n') {
+        out += '\\n';
+      } else if (ch === '\r') {
+        out += '\\r';
+      } else if (ch === '\t') {
+        out += '\\t';
+      } else if (code < 0x20 || code === 0x7f) {
+        const hex = code.toString(16).padStart(2, '0');
+        out += `\\x${hex}`;
+      } else {
+        out += ch;
+      }
+    }
+    return out + '"';
   }
 
   /** 唯一名（对齐 uniqueProxyName：首个复用原名，之后 " (2)"、" (3)" 递增） */
@@ -248,14 +730,17 @@ export class YamlMerger {
         if (count > MergeLimits.MAX_MERGED_PROXY_NODES) {
           throw new YamlMergeError('订阅节点数量超过上限 (10000)');
         }
-        const p = YamlMerger.parseProxyItem(itemLines);
+        let p: MergedProxy | null = null;
+        try {
+          p = YamlMerger.parseProxyItem(itemLines);
+        } catch (e) {
+          if (e instanceof YamlNodeError) {
+            continue;
+          }
+          throw new YamlMergeError(e instanceof Error ? e.message : '代理节点解析发生未知错误');
+        }
         if (p === null) {
           continue;
-        }
-        if (p.name.length > MergeLimits.MAX_PROXY_FIELD_LENGTH
-          || p.server.length > MergeLimits.MAX_PROXY_FIELD_LENGTH
-          || p.password.length > MergeLimits.MAX_PROXY_FIELD_LENGTH) {
-          throw new YamlMergeError('订阅字段长度超过上限 (64KB)');
         }
         fresh.push(p);
       }
@@ -270,7 +755,15 @@ export class YamlMerger {
         if (prevCount > MergeLimits.MAX_MERGED_PROXY_NODES) {
           throw new YamlMergeError('历史缓存节点数量超过上限');
         }
-        const old = YamlMerger.parseProxyItem(itemLines);
+        let old: MergedProxy | null = null;
+        try {
+          old = YamlMerger.parseProxyItem(itemLines);
+        } catch (e) {
+          if (e instanceof YamlNodeError) {
+            continue;
+          }
+          throw new YamlMergeError(e instanceof Error ? e.message : '代理节点解析发生未知错误');
+        }
         if (old === null) {
           continue;
         }
