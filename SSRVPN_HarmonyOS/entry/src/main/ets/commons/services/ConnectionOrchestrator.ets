@@ -76,6 +76,7 @@ export class ConnectionOrchestrator {
   private context: Context | null = null;
   private apiSecret: string = '';
   private lastSubs: SubscriptionService | null = null;
+  private lastNode: ProxyNode | null = null;
   private recoveryAttempts: number = 0; // 内核恢复退避计数（对应 core_recovery_policy）
   private lastNodeName: string = '';
 
@@ -90,13 +91,38 @@ export class ConnectionOrchestrator {
     this.context = context;
   }
 
-  /** 运行时切换代理模式。切到 global 后 mihomo 会走 GLOBAL 组(默认 DIRECT),
-   *  必须把当前节点重新下发到 PROXY+GLOBAL 组, 否则全局模式全走直连、被 DNS 污染。 */
-  async applyProxyMode(mode: string): Promise<void> {
-    await this.api.setMode(mode);
-    if (this.state === ConnState.CONNECTED && this.lastNodeName.length > 0) {
-      await this.api.selectNode(this.lastNodeName);
+  /** 配置变更后自动重启隧道：仅当前处于已连接/连接中时才断开并用同一节点重连
+   *  （重连会重新生成含新 mode/规则/hosts 的 YAML 并重建带新 blockedApplications 的 TUN）。
+   *  未连接时不动 —— 下次手动连接自然带上最新配置。 */
+  private restarting: boolean = false;
+  async restartIfConnected(reason: string): Promise<boolean> {
+    if (this.state !== ConnState.CONNECTED && this.state !== ConnState.CONNECTING) {
+      return false;
     }
+    if (this.restarting) {
+      return false; // 已有重启在途, 忽略重复触发(防抖)
+    }
+    const subs = this.lastSubs;
+    const node = this.lastNode;
+    if (subs === null || node === null) {
+      return false;
+    }
+    this.restarting = true;
+    AppLogger.info(TAG, `auto-restart (${reason}): 断开并重连以应用新配置`);
+    try {
+      await this.disconnect();
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), 600));
+      const ok = await this.connect(node, subs);
+      AppLogger.info(TAG, `auto-restart (${reason}) 完成, 结果=${ok}`);
+      return ok;
+    } finally {
+      this.restarting = false;
+    }
+  }
+
+  /** 运行时切换代理模式：模式写在 YAML 里, 需重建隧道生效(自动断开重连)。 */
+  async applyProxyMode(mode: string): Promise<void> {
+    await this.restartIfConnected('proxyMode=' + mode);
   }
 
   /** 读取 VPN Extension 进程回写的启动错误（跨进程文件通道） */
@@ -216,6 +242,7 @@ export class ConnectionOrchestrator {
         }
       }
       this.lastNodeName = target.name;
+      this.lastNode = target;
 
       // API secret 保持稳定(首次生成后复用): 每次重连都换 secret 会让其他页面
       // 持有的旧 secret 全部 401, 延迟测试/节点切换集体失败(表现全是"超时")。

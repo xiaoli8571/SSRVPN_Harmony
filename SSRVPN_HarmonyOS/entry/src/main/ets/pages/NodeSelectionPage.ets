@@ -119,8 +119,7 @@ struct NodeSelectionPage {
       getInitial: (): string => this.settings.forceProxySites.join('\n'),
       onConfirm: (sites: string[]) => {
         this.settings.forceProxySites = sites;
-        SettingsService.save(this.settings);
-        promptAction.showToast({ message: `已保存 ${sites.length} 个强制代理站点，下次连接生效` });
+        this.persistAndMaybeRestart('forceProxySites', `已保存 ${sites.length} 个强制代理站点`);
       }
     })
   });
@@ -133,8 +132,7 @@ struct NodeSelectionPage {
       getInitial: (): string => this.settings.forceDirectSites.join('\n'),
       onConfirm: (sites: string[]) => {
         this.settings.forceDirectSites = sites;
-        SettingsService.save(this.settings);
-        promptAction.showToast({ message: `已保存 ${sites.length} 个强制直连站点，下次连接生效` });
+        this.persistAndMaybeRestart('forceDirectSites', `已保存 ${sites.length} 个强制直连站点`);
       }
     })
   });
@@ -147,11 +145,18 @@ struct NodeSelectionPage {
       getInitial: (): string => this.settings.excludedApps.join('\n'),
       onConfirm: (pkgs: string[]) => {
         this.settings.excludedApps = pkgs;
-        SettingsService.save(this.settings);
-        promptAction.showToast({ message: `已保存 ${pkgs.length} 个免代理应用，下次连接生效` });
+        this.persistAndMaybeRestart('excludedApps', `已保存 ${pkgs.length} 个免代理应用`);
       }
     })
   });
+
+  /** 落盘后自动重启隧道(若已连接)。先 await save 再 restart, 确保重连读到最新配置。 */
+  private persistAndMaybeRestart(reason: string, savedMsg: string): void {
+    SettingsService.save(this.settings).then(async () => {
+      const did = await this.orchestrator.restartIfConnected(reason);
+      promptAction.showToast({ message: did ? savedMsg + '，正在自动重连…' : savedMsg + '，下次连接生效' });
+    });
+  }
 
   onPageShow(): void {
     this.bootstrap();
@@ -495,10 +500,12 @@ struct NodeSelectionPage {
       }
       this.proxyMode = mode;
       this.settings.proxyMode = mode;
-      SettingsService.save(this.settings);
-      // 切模式后重设节点到 PROXY+GLOBAL 组(全局模式走 GLOBAL, 否则默认 DIRECT)
-      this.orchestrator.applyProxyMode(mode);
-      promptAction.showToast({ message: mode === 'global' ? '已切换为全局模式' : '已切换为智能(规则)模式' });
+      // 模式写在 YAML 里, 需重建隧道生效: 落盘后自动断开重连(未连接则下次连接生效)
+      const label = mode === 'global' ? '全局模式' : '智能(规则)模式';
+      SettingsService.save(this.settings).then(async () => {
+        const did = await this.orchestrator.restartIfConnected('proxyMode=' + mode);
+        promptAction.showToast({ message: did ? `已切换${label}，正在自动重连…` : `已切换${label}，下次连接生效` });
+      });
     })
   }
   @Builder
