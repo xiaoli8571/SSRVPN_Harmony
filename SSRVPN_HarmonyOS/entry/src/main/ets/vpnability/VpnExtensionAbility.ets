@@ -155,7 +155,12 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
       // 未启动过时停止属正常
     }
 
-    const config: vpnExtension.VpnConfig = {
+    // IPv6 入站(UI 侧连接前探测物理网络后传入): 1=当前环境有 IPv6, 开双栈;
+    // 0/缺省=无 IPv6 环境, 自动绕过 —— 只装 IPv4 地址与默认路由, 不把设备
+    // 引上没有出口的 ::/0(否则 YouTube 等 IPv6-preferred 应用直接失联)。
+    const ipv6Inbound = (params !== undefined && params !== null)
+      ? ((params['ipv6Inbound'] as number) === 1) : false;
+    const config: vpnExtension.VpnConfig = ipv6Inbound ? {
       addresses: [{
         address: { address: TUN_ADDRESS, family: 1 },
         prefixLength: TUN_PREFIX
@@ -163,8 +168,7 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
         address: { address: TUN_ADDRESS_V6, family: 2 },
         prefixLength: TUN_PREFIX_V6
       }],
-      // 默认路由捕获全部流量（对齐 NekoBox: interface 指定 TUN 名 + isDefaultRoute）;
-      // IPv6 ::/0 为"IPv6 入站"常开项, 与内核 inet6-address/fake-ip fc00::/71 配套。
+      // 双栈默认路由（对齐 NekoBox: interface 指定 TUN 名 + isDefaultRoute）
       routes: [{
         interface: TUN_IFNAME,
         destination: { address: { address: '0.0.0.0', family: 1 }, prefixLength: 0 },
@@ -182,7 +186,43 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
       mtu: VPN_MTU,
       isIPv4Accepted: true,
       isIPv6Accepted: true
+    } : {
+      addresses: [{
+        address: { address: TUN_ADDRESS, family: 1 },
+        prefixLength: TUN_PREFIX
+      }],
+      // 默认路由捕获全部流量（对齐 NekoBox: interface 指定 TUN 名 + isDefaultRoute）
+      routes: [{
+        interface: TUN_IFNAME,
+        destination: { address: { address: '0.0.0.0', family: 1 }, prefixLength: 0 },
+        gateway: { address: '0.0.0.0', family: 1 },
+        hasGateway: false,
+        isDefaultRoute: true
+      }],
+      dnsAddresses: DNS_SERVERS,
+      mtu: VPN_MTU,
+      isIPv4Accepted: true,
+      isIPv6Accepted: false
     };
+    AppLogger.info(TAG, `vpn config: ipv6Inbound=${ipv6Inbound ? 1 : 0}`);
+
+    // 强制不走代理的应用(VpnConfig.blockedApplications): 框架层让这些包名的 App
+    // 流量直接走物理网络、不进隧道 —— 刷抖音/微信等不需要代理的 App 不受加速影响。
+    // 包名由 UI 侧填写(excludedApps), 逗号拼接传入。
+    const bypassRaw = (params !== undefined && params !== null) ? (params['bypassPackages'] as string) : '';
+    if (bypassRaw !== undefined && bypassRaw !== null && bypassRaw.length > 0) {
+      const pkgs: string[] = [];
+      for (const p of bypassRaw.split(',')) {
+        const t = p.trim();
+        if (t.length > 0) {
+          pkgs.push(t);
+        }
+      }
+      if (pkgs.length > 0) {
+        config.blockedApplications = pkgs;
+        AppLogger.info(TAG, `blockedApplications(${pkgs.length}): ${pkgs.join(' ')}`);
+      }
+    }
 
     try {
       this.connection = vpnExtension.createVpnConnection(this.context);

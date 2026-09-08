@@ -5,49 +5,31 @@
 # Output: entry\libs\arm64-v8a\libgojni.so (ohos arm64, musl, c-shared, tags: with_gvisor,cmfa)
 $ErrorActionPreference = 'Stop'
 
-# Repo layout (this script lives at SSRVPN_HarmonyOS/scripts/):
-#   <repoRoot>/SSRVPN_HarmonyOS        <- this app project ($ProjRoot)
-#   <repoRoot>/mihomo-build/mihomo-*   <- patched mihomo source ($SrcDir)
-#   <repoRoot>/mihomo-build/gvisor-patched  <- referenced by go.mod replace
-# All paths can be overridden via environment variables.
-$RepoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
-$SrcDir = if ($env:MIHOMO_SRC) { $env:MIHOMO_SRC } else { Join-Path $RepoRoot 'mihomo-build\mihomo-7031b7569831677a8d89ad8a8a3347db116ba1a8' }
-# DevEco native SDK (clang + sysroot). Override with DEVECO_NATIVE_SDK if yours differs.
-$NativeSdk = if ($env:DEVECO_NATIVE_SDK) { $env:DEVECO_NATIVE_SDK } else { 'C:\Program Files\Huawei\DevEco Studio\sdk\default\openharmony\native' }
-# 8.3 short paths avoid quoting issues in CC command lines.
-$NdkClang = Join-Path $NativeSdk 'llvm\bin\clang.exe'
-$NdkSysroot = Join-Path $NativeSdk 'sysroot'
-# OpenHarmony-flavored Go toolchain (GOOS=openharmony support), NOT stock Go.
-# Get it from https://gitee.com/openharmony-sig/ohos_golang_go (build per its README).
-$GoRoot = if ($env:OHOS_GO_ROOT) { $env:OHOS_GO_ROOT } else { Join-Path $env:USERPROFILE 'ohos-go-build\ohos_golang_go' }
+$SrcDir = 'C:\Users\xiaoli\Downloads\SSRVPN-HarmonyOS-full-20260907-0851\SSRVPN-HarmonyOS-full\mihomo-build\mihomo-7031b7569831677a8d89ad8a8a3347db116ba1a8'
+$NdkClang = 'C:\PROGRA~1\Huawei\DEVECO~1\sdk\default\openharmony\native\llvm\bin\clang.exe'
+$NdkSysroot = 'C:\PROGRA~1\Huawei\DEVECO~1\sdk\default\openharmony\native\sysroot'
+$GoRoot = 'C:\Users\xiaoli\ohos-go-build\ohos_golang_go'
 $GoExe = Join-Path $GoRoot 'bin\go.exe'
-$ProjRoot = if ($env:PROJ_ROOT) { $env:PROJ_ROOT } else { Join-Path $RepoRoot 'SSRVPN_HarmonyOS' }
+$ProjRoot = 'C:\Users\xiaoli\Downloads\SSRVPN-HarmonyOS-full-20260907-0851\SSRVPN-HarmonyOS-full\SSRVPN_HarmonyOS'
 $OutDir = Join-Path $ProjRoot 'entry\libs\arm64-v8a'
-$LogDir = if ($env:BUILD_LOG_DIR) { $env:BUILD_LOG_DIR } else { $RepoRoot }
+$LogDir = 'C:\Users\xiaoli\Downloads\SSRVPN-HarmonyOS-full-20260907-0851\SSRVPN-HarmonyOS-full'
 
-if (-not (Test-Path $NdkClang)) { Write-Error "NDK clang not found: $NdkClang (set DEVECO_NATIVE_SDK)"; exit 1 }
-if (-not (Test-Path $GoExe)) { Write-Error "OpenHarmony Go not found: $GoExe (set OHOS_GO_ROOT)"; exit 1 }
+if (-not (Test-Path $NdkClang)) { Write-Error "NDK clang not found: $NdkClang"; exit 1 }
+if (-not (Test-Path $GoExe)) { Write-Error "OpenHarmony Go not found: $GoExe"; exit 1 }
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 
 $env:GOROOT = $GoRoot
 $env:GOTOOLCHAIN = 'local'
-$env:Path = "$GoRoot\bin;$(Join-Path $NativeSdk 'llvm\bin');$env:Path"
+$env:Path = "$GoRoot\bin;C:\Program Files\Huawei\DevEco Studio\sdk\default\openharmony\native\llvm\bin;$env:Path"
 $env:GOPROXY = 'https://goproxy.cn,https://proxy.golang.org,direct'
 $env:CGO_ENABLED = '1'
 $env:GOOS = 'openharmony'
 $env:GOARCH = 'arm64'
 $env:GOFLAGS = '-trimpath'
 $env:GOMAXPROCS = '1'
-# CC/CXX go through go's env parsing where spaces break quoting -> use 8.3 short paths.
-function ToShortPath([string]$p) {
-  try { return (New-Object -ComObject Scripting.FileSystemObject).GetFolder($p).ShortPath } catch { return $p }
-}
-$NdkClangShort = ToShortPath $NdkClang
-$NdkClangxxShort = ToShortPath (Join-Path $NativeSdk 'llvm\bin\clang++.exe')
-$NdkSysrootShort = ToShortPath $NdkSysroot
-$env:CC = "$NdkClangShort --target=aarch64-linux-ohos --sysroot=$NdkSysrootShort"
-$env:CXX = "$NdkClangxxShort --target=aarch64-linux-ohos --sysroot=$NdkSysrootShort"
-$env:CGO_CFLAGS = "--target=aarch64-linux-ohos --sysroot=$NdkSysrootShort -ftls-model=global-dynamic"
+$env:CC = "$NdkClang --target=aarch64-linux-ohos --sysroot=$NdkSysroot"
+$env:CXX = "C:\PROGRA~1\Huawei\DEVECO~1\sdk\default\openharmony\native\llvm\bin\clang++.exe --target=aarch64-linux-ohos --sysroot=$NdkSysroot"
+$env:CGO_CFLAGS = "--target=aarch64-linux-ohos --sysroot=$NdkSysroot -ftls-model=global-dynamic"
 $env:CGO_CPPFLAGS = $env:CGO_CFLAGS
 $env:CGO_CXXFLAGS = $env:CGO_CFLAGS
 

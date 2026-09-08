@@ -138,6 +138,20 @@ struct NodeSelectionPage {
       }
     })
   });
+  /** 不走代理的应用(按包名) 对话框 */
+  private bypassAppsDialog: CustomDialogController = new CustomDialogController({
+    builder: SiteListDialog({
+      title: '不走代理的应用',
+      description: '每行一个应用包名，这些 App 的流量完全绕过 VPN 直连物理网络（不受加速影响）。抖音=com.ss.hm.ugc.aweme，微信=com.tencent.wechat',
+      placeholder: 'com.ss.hm.ugc.aweme\ncom.tencent.wechat',
+      getInitial: (): string => this.settings.excludedApps.join('\n'),
+      onConfirm: (pkgs: string[]) => {
+        this.settings.excludedApps = pkgs;
+        SettingsService.save(this.settings);
+        promptAction.showToast({ message: `已保存 ${pkgs.length} 个免代理应用，下次连接生效` });
+      }
+    })
+  });
 
   onPageShow(): void {
     this.bootstrap();
@@ -370,6 +384,27 @@ struct NodeSelectionPage {
         // 与上方代理卡片拉开间距, 避免视觉重叠
         .margin({ top: 18 })
 
+        // ── 不走代理的应用(按包名排除, VpnConfig.blockedApplications) ──
+        Row({ space: 7 }) {
+          Text('📱').fontSize(14)
+          Text('不走代理的应用')
+            .fontSize(13).fontWeight(FontWeight.Medium).fontColor(Ui.accent)
+          if (this.settings.excludedApps.length > 0) {
+            Text(`${this.settings.excludedApps.length}`)
+              .fontSize(11).fontColor(Ui.textPrimary)
+              .padding({ left: 7, right: 7, top: 1, bottom: 1 })
+              .borderRadius(9)
+              .backgroundColor(Ui.accent)
+          }
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.Center)
+        .padding({ top: 9, bottom: 9 })
+        .borderRadius(13)
+        .backgroundColor('#2920C8B4')
+        .margin({ top: 10 })
+        .onClick(() => this.bypassAppsDialog.open())
+
         // ── 订阅筛选 chips ──
         if (this.subChips.length > 0) {
           Scroll() {
@@ -461,7 +496,8 @@ struct NodeSelectionPage {
       this.proxyMode = mode;
       this.settings.proxyMode = mode;
       SettingsService.save(this.settings);
-      this.orchestrator.api.setMode(mode);
+      // 切模式后重设节点到 PROXY+GLOBAL 组(全局模式走 GLOBAL, 否则默认 DIRECT)
+      this.orchestrator.applyProxyMode(mode);
       promptAction.showToast({ message: mode === 'global' ? '已切换为全局模式' : '已切换为智能(规则)模式' });
     })
   }

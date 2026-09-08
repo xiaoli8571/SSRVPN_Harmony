@@ -81,15 +81,25 @@ export class ClashApiService {
     }
   }
 
-  /** 切换 PROXY 组选中节点（对应 MihomoProxySelection） */
+  /** 切换选中节点。必须同时下发到 PROXY 组和 GLOBAL 组:
+   *  mihomo 在 global(全局)模式下忽略具名 PROXY 组, 走隐式 GLOBAL 组; 若不设置
+   *  GLOBAL, 它默认选 DIRECT → 全局模式下所有流量直连、被国内 DNS 污染打不开。
+   *  (真机实证: 全局模式 GLOBAL now=DIRECT, youtube dial 假 IP 超时。) */
   async selectNode(nodeName: string): Promise<boolean> {
+    const okProxy = await this.selectInGroup('PROXY', nodeName);
+    const okGlobal = await this.selectInGroup('GLOBAL', nodeName);
+    return okProxy || okGlobal;
+  }
+
+  /** 在指定代理组选择节点: PUT /proxies/{group} {name} */
+  private async selectInGroup(group: string, nodeName: string): Promise<boolean> {
     try {
       const req = http.createHttp();
       const headers: Record<string, string> = this.authHeader();
       headers['Content-Type'] = 'application/json';
       const payload: Record<string, string> = {};
       payload['name'] = nodeName;
-      const resp = await req.request(`${this.baseUrl()}/proxies/PROXY`, {
+      const resp = await req.request(`${this.baseUrl()}/proxies/${encodeURIComponent(group)}`, {
         method: http.RequestMethod.PUT,
         header: headers,
         extraData: JSON.stringify(payload),
@@ -100,7 +110,7 @@ export class ClashApiService {
       req.destroy();
       return resp.responseCode === 204 || resp.responseCode === 200;
     } catch (e) {
-      AppLogger.error(TAG, `selectNode failed: ${this.errText(e)}`);
+      AppLogger.error(TAG, `selectInGroup(${group}) failed: ${this.errText(e)}`);
       return false;
     }
   }

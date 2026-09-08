@@ -17,6 +17,8 @@ import { util } from '@kit.ArkTS';
 import { coreBridge } from '../../core/CoreBridge';
 import { ClashApiService, TrafficSnapshot } from './ClashApiService';
 import { ClashConfigGenerator } from './ClashConfigGenerator';
+import { Ipv6Detector } from './Ipv6Detector';
+import { DoHResolver } from './DoHResolver';
 import { SubscriptionService } from './SubscriptionService';
 import { SettingsService, ConnectionSnapshot } from './SettingsService';
 import { SsrvpnNotifier } from './SsrvpnNotifier';
@@ -66,6 +68,8 @@ export class ConnectionOrchestrator {
   startedAt: number = 0;
   lastError: string = '';
   api: ClashApiService = new ClashApiService();
+  /** 本次连接是否启用 IPv6 入站（连接时探测, 无 IPv6 环境自动绕过） */
+  ipv6Active: boolean = false;
   private monitorTimer: number = -1;
   private trafficTimer: number = -1;
   private connectSeq: number = 0; // 启动代际门控（对应 StartGenerationGate）
@@ -84,6 +88,15 @@ export class ConnectionOrchestrator {
 
   init(context: Context): void {
     this.context = context;
+  }
+
+  /** 运行时切换代理模式。切到 global 后 mihomo 会走 GLOBAL 组(默认 DIRECT),
+   *  必须把当前节点重新下发到 PROXY+GLOBAL 组, 否则全局模式全走直连、被 DNS 污染。 */
+  async applyProxyMode(mode: string): Promise<void> {
+    await this.api.setMode(mode);
+    if (this.state === ConnState.CONNECTED && this.lastNodeName.length > 0) {
+      await this.api.selectNode(this.lastNodeName);
+    }
   }
 
   /** 读取 VPN Extension 进程回写的启动错误（跨进程文件通道） */
@@ -214,6 +227,28 @@ export class ConnectionOrchestrator {
         await SettingsService.setApiSecret(this.apiSecret);
       }
 
+      // 关键：扩展进程存活时再次 startVpnExtensionAbility 只会累加 startId，
+      // 系统不会重新回调 onCreate（TUN/内核启动逻辑不会重放）。
+      // 因此每次连接前先停掉既有 VPN 扩展（触发 onDestroy → 内核停止），
+      // 等待进程退出后重新拉起，保证新配置/新节点真正生效。
+      // 注意: 停旧隧道也必须在 IPv6 探测之前 —— 隧道存活时 ::/0 路由指向
+      // 隧道自身, 探测会误报"有 IPv6"。
+      try {
+        const stopWant: Want = {
+          bundleName: 'com.ssrvpn.harmonyos',
+          abilityName: 'VpnExtensionAbility'
+        };
+        await vpnExtension.stopVpnExtensionAbility(stopWant);
+      } catch (e) {
+        // 未运行时停止会报错，属正常
+      }
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), 800));
+
+      // IPv6 入站环境探测（FlClash 等主流客户端语义）: 当前网络确实有 IPv6 出口
+      // 才开双栈; 无 IPv6 环境自动绕过(纯 IPv4), 避免 ::/0 + fake-ip6 把
+      // IPv6-preferred 应用(YouTube 等)引上死路。
+      this.ipv6Active = await Ipv6Detector.hasIPv6();
+
       // geoip.metadb 缺失时降级生成（不含 GEOIP 规则）, 避免内核在 config.Parse
       // 阶段联网下载 MMDB 失败导致启动卡死; 连接成功后后台补齐, 下次连接生效。
       const geoipPath = `${this.context.cacheDir}/geoip.metadb`;
@@ -227,8 +262,28 @@ export class ConnectionOrchestrator {
         AppLogger.info(TAG, 'geoip.metadb missing; generate config without GEOIP rule');
       }
 
+      // ── 代理服务器域名防投毒解析(UI 进程, 此刻 VPN 未起、网络干净) ──
+      // 明文 UDP DNS 会把代理域名投毒成假 IP → 内核拨假地址全线超时 → 连上但
+      // 打不开任何网站。这里用 DoH 预解析所有节点入口域名, 结果写进 YAML hosts:,
+      // 内核直接命中真实 IP。带缓存 + 5s 全局预算, 不会明显拖慢连接。
+      const serverDomains: string[] = [];
+      for (const n of subs.nodes) {
+        const s = n.server;
+        if (s.length === 0 || s.includes(':') || /^\d+\.\d+\.\d+\.\d+$/.test(s)) {
+          continue; // 跳过空/IPv6/裸 IPv4
+        }
+        serverDomains.push(s);
+      }
+      let proxyHosts: Record<string, string> = {};
+      try {
+        proxyHosts = await DoHResolver.resolveMany(serverDomains, 5000);
+      } catch (e) {
+        AppLogger.warn(TAG, `DoH pre-resolve failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      AppLogger.info(TAG, `DoH pinned ${Object.keys(proxyHosts).length}/${serverDomains.length} proxy servers`);
+
       const yaml = ClashConfigGenerator.generate(target, subs.nodes, settings, MIXED_PORT, API_PORT,
-        this.apiSecret, useGeoip);
+        this.apiSecret, useGeoip, this.ipv6Active, proxyHosts);
       const configPath = `${this.context.cacheDir}/${CONFIG_FILE}`;
       const file = fs.openSync(configPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
       fs.writeSync(file.fd, yaml);
@@ -236,28 +291,20 @@ export class ConnectionOrchestrator {
       AppLogger.info(TAG, `config written: ${configPath} (${yaml.length} bytes)`);
       this.clearStartError();
 
-      // 关键：扩展进程存活时再次 startVpnExtensionAbility 只会累加 startId，
-      // 系统不会重新回调 onCreate（TUN/内核启动逻辑不会重放）。
-      // 因此每次连接前先停掉既有 VPN 扩展（触发 onDestroy → 内核停止），
-      // 等待进程退出后重新拉起，保证新配置/新节点真正生效。
-      try {
-        const stopWant: Want = {
-          bundleName: 'com.ssrvpn.harmonyos',
-          abilityName: 'VpnExtensionAbility'
-        };
-        await vpnExtension.stopVpnExtensionAbility(stopWant);
-      } catch (e) {
-        // 未运行时停止会报错，属正常
-      }
-      await new Promise<void>((resolve) => setTimeout(() => resolve(), 800));
-
       // 拉起 VPN 能力（首次会弹系统 VPN 授权框）；TUN 建立 + 内核启动都在扩展进程完成。
       // 扩展进程把启动结果写入 vpn_start_error.txt（空文件/不存在 = 成功，非空 = 失败原因），
       // 并写入 vpn_start_ok.txt 成功标记 —— UI 进程通过文件轮询确认，绕开跨进程 loopback 探测的不确定性。
+      // ipv6Inbound 标志同步 VpnConfig 的双栈开关, 与 YAML 保持一致。
+      // bypassPackages: 强制不走代理的应用包名(VpnConfig.blockedApplications,
+      //   框架层直接让这些 App 的流量绕过隧道走物理网络)。
       const want: Want = {
         bundleName: 'com.ssrvpn.harmonyos',
         abilityName: 'VpnExtensionAbility',
-        parameters: { configPath: configPath }
+        parameters: {
+          configPath: configPath,
+          ipv6Inbound: this.ipv6Active ? 1 : 0,
+          bypassPackages: settings.excludedApps.join(',')
+        }
       };
       await vpnExtension.startVpnExtensionAbility(want);
 

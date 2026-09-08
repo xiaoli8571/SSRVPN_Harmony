@@ -406,6 +406,11 @@ struct DiagnosticsLogDialog {
       c4.summary = d.uptimeSeconds > 0 ? `${d.uptimeSeconds}s` : '—';
       c4.tone = d.uptimeSeconds > 0 ? 'ok' : 'warn';
       checks.push(c4);
+      const cv6 = new DiagCheck();
+      cv6.title = 'IPv6 入站';
+      cv6.summary = orch.ipv6Active ? '环境存在 IPv6 出口, 双栈已启用' : '当前环境无 IPv6, 已自动绕过(纯 IPv4)';
+      cv6.tone = 'ok';
+      checks.push(cv6);
       if (d.lastError.length > 0) {
         const c5 = new DiagCheck();
         c5.title = '最近错误';

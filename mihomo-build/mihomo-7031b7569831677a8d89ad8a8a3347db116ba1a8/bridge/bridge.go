@@ -15,7 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/metacubex/mihomo/component/resolver"
 	"github.com/metacubex/mihomo/config"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/hub"
@@ -224,13 +223,11 @@ func Start(configPath string, tunFd int64) (result string) {
 		}
 		log.Infoln("Bridge: TUN fd=%d, stack=gvisor(patched), address=172.19.0.1/30", tunFd)
 
-		// ── 防回环双保险（对齐 NekoBox 的 route.default_interface）──
-		// 1) 代理服务器域名在内核启动前用系统 resolver 预解析成真实 IP 写入
-		//    hosts: 否则 TUN 的 fake-ip + dns-hijack 会把代理域名也解析成
-		//    198.18.x.x, 内核拿假 IP 拨号代理服务器 → 全部 i/o timeout
-		//    (真机 core.log: "dial tcp 198.18.0.5:443: i/o timeout" 实证)。
-		pinProxyServerHosts(cfg)
-		// 2) 出站 socket 强绑物理网卡(wlan0 等), 绕开 TUN 默认路由:
+		// ── 防回环（对齐 NekoBox 的 route.default_interface）──
+		// 代理服务器域名的防投毒解析已上移到 UI 进程(连接前网络干净时 DoH 解析,
+		// 结果写入 YAML 的 hosts: 段)。此处不再解析: 内核启动时 TUN 路由已生效,
+		// 进程自身 DNS/DoH 会进不了隧道导致 i/o timeout + 启动变慢(真机实证)。
+		// 1) 出站 socket 强绑物理网卡(wlan0 等), 绕开 TUN 默认路由:
 		//    应用访问代理服务器域名的连接会被 MATCH,PROXY 送进代理自身,
 		//    绑网卡后即使规则误伤也能直连到达。
 		cfg.General.Interface = defaultPhysicalInterface()
@@ -391,46 +388,4 @@ func defaultPhysicalInterface() string {
 		}
 	}
 	return ""
-}
-
-// pinProxyServerHosts 把配置里所有代理服务器的域名预解析为真实 IP 并写入 cfg.Hosts,
-// 让内核拨号代理服务器时完全绕开 fake-ip DNS(否则拿 198.18.x.x 假地址拨号, 全部超时)。
-// 解析用纯净的系统 UDP DNS(此时 TUN 尚未接管, /etc/resolv.conf 指向系统 DNS)。
-func pinProxyServerHosts(cfg *config.Config) {
-	if cfg == nil || len(cfg.Proxies) == 0 || cfg.Hosts == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	pinned := 0
-	for _, proxy := range cfg.Proxies {
-		server := proxy.Addr()
-		if len(server) == 0 {
-			continue
-		}
-		// 跳过裸 IP
-		if net.ParseIP(server) != nil {
-			continue
-		}
-		ips, err := net.DefaultResolver.LookupIP(ctx, "ip4", server)
-		if err != nil || len(ips) == 0 {
-			log.Warnln("Bridge: pre-resolve proxy server %s failed: %v", server, err)
-			continue
-		}
-		addr, ok := netip.AddrFromSlice(ips[0])
-		if !ok {
-			continue
-		}
-		hostValue, hvErr := resolver.NewHostValueByIPs([]netip.Addr{addr.Unmap()})
-		if hvErr != nil {
-			continue
-		}
-		if insertErr := cfg.Hosts.Insert(server, hostValue); insertErr != nil {
-			log.Warnln("Bridge: insert host %s failed: %v", server, insertErr)
-			continue
-		}
-		pinned++
-		log.Infoln("Bridge: pinned %s -> %s", server, ips[0].String())
-	}
-	log.Infoln("Bridge: pinned %d proxy server hosts", pinned)
 }

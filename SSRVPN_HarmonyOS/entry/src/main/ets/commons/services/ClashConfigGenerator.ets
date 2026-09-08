@@ -13,7 +13,8 @@ import { AppSettings } from '../models/AppSettings';
 
 export class ClashConfigGenerator {
   static generate(selectedNode: ProxyNode, allNodes: ProxyNode[], settings: AppSettings,
-    mixedPort: number, apiPort: number, apiSecret: string, useGeoip: boolean = true): string {
+    mixedPort: number, apiPort: number, apiSecret: string, useGeoip: boolean = true,
+    ipv6Enabled: boolean = false, proxyHosts: Record<string, string> = {}): string {
     const lines: string[] = [];
 
     lines.push('mixed-port: ' + mixedPort);
@@ -22,9 +23,10 @@ export class ClashConfigGenerator {
     // 代理模式（upstream settings.proxyMode）：rule=规则 / global=全局
     lines.push('mode: ' + (settings.proxyMode === 'global' ? 'global' : 'rule'));
     lines.push('log-level: info');
-    // IPv6 入站(FlClash 常用功能, 默认常开不提供关闭): 内核处理 IPv6 流量,
-    // TUN 配 fdfe:dcba:9876::1/126 + VpnConfig ::/0 路由, 与 IPv4 行为一致。
-    lines.push('ipv6: true');
+    // IPv6 入站(FlClash 常用功能): 按当前网络环境自动启用 —— 连接时由 Ipv6Detector
+    // 探测, 有 IPv6 出口才开; 无 IPv6 环境自动绕过(纯 IPv4), 防止 IPv6-preferred
+    // 应用(YouTube 等)被 fake-ip6 + ::/0 引上死路。
+    lines.push('ipv6: ' + (ipv6Enabled ? 'true' : 'false'));
     lines.push('unified-delay: true');
     lines.push('tcp-concurrent: true');
     lines.push('');
@@ -33,10 +35,13 @@ export class ClashConfigGenerator {
     lines.push('  listen: 127.0.0.1:1053');
     // DNS 覆写(FlClash 常用功能, 默认常开不提供关闭): enable+fake-ip 接管全部解析,
     // 应用侧 DNS 设置被覆写为内核 fake-ip, 避免运营商 DNS 污染。
-    lines.push('  ipv6: true');
+    // dns.ipv6=false 时 AAAA 直接返回空 = IPv6 解析绕过, 应用自动走 IPv4。
+    lines.push('  ipv6: ' + (ipv6Enabled ? 'true' : 'false'));
     lines.push('  enhanced-mode: fake-ip');
     lines.push('  fake-ip-range: 198.18.0.1/16');
-    lines.push('  fake-ip-range6: fc00::/71');
+    if (ipv6Enabled) {
+      lines.push('  fake-ip-range6: fc00::/71');
+    }
     // DNS 上游必须用裸 IP UDP 直连(不走代理不劫持): DoH(域名)会引发解析死锁——
     // 解析 DoH 域名 → DoH 请求 → 又需要域名 → 回环超时(真机 core.log 实证)。
     lines.push('  default-nameserver:');
@@ -60,9 +65,21 @@ export class ClashConfigGenerator {
     lines.push('  auto-route: false');   // 路由由 VpnExtensionAbility 安装
     lines.push('  auto-detect-interface: false');
     lines.push('  mtu: 1400');          // 与 VpnConfig.mtu 一致(对齐 NekoBox)
-    // IPv6 入站: 与 VpnExtensionAbility 的 TUN_ADDRESS_V6/TUN_PREFIX_V6 严格一致
-    lines.push("  inet6-address: ['fdfe:dcba:9876::1/126']");
+    if (ipv6Enabled) {
+      // IPv6 入站已启用: 与 VpnExtensionAbility 的 TUN_ADDRESS_V6/TUN_PREFIX_V6 严格一致
+      lines.push("  inet6-address: ['fdfe:dcba:9876::1/126']");
+    }
     lines.push('');
+    // ── hosts: 代理服务器域名的防投毒固定解析(UI 进程 DoH 预解析结果) ──
+    // 内核拨号代理服务器时直接命中这些真实 IP, 不再走运行期(可能被污染的)DNS。
+    const hostKeys = Object.keys(proxyHosts);
+    if (hostKeys.length > 0) {
+      lines.push('hosts:');
+      for (const h of hostKeys) {
+        lines.push(`  ${h}: ${proxyHosts[h]}`);
+      }
+      lines.push('');
+    }
     lines.push('proxies:');
     // 只输出能生成合法配置的节点（rawYaml 透传或 ss/ssr 字段完整）
     const validNodes: ProxyNode[] = [];

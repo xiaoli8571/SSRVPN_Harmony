@@ -14,14 +14,37 @@
 - 节点选择：分组筛选、按国家/地区图标、批量测速（`/proxies` API）、延迟配色
 - 连接编排：`VpnExtensionAbility` 创建 TUN，进程内加载 `libgojni.so`（Mihomo）并启动内核
 - 防回环：`connection.protectProcessNet()`（API 22+）保护内核自身 socket，避免自连死循环
-- DNS：fake-ip 模式 + TUN `dns-hijack any:53`（DNS 覆写，常开），裸 IP UDP 上游防解析死锁
-- **双栈**：IPv4 + IPv6 入站（`::/0` 路由 + `fake-ip-range6`，常开）
+- DNS 覆写：fake-ip 模式 + TUN `dns-hijack any:53`（常开），裸 IP UDP 上游防解析死锁
+- **代理域名防投毒**：连接前在 UI 进程用 DoH（doh.pub/alidns）预解析所有节点入口域名，
+  写入 YAML `hosts:`，内核直接命中真实 IP —— 规避国内 UDP DNS 把代理域名污染成假 IP
+  （否则表现为"连上了但所有网站打不开"）
+- **IPv6 入站（按环境自动启用）**：连接前探测物理网络 IPv6 连通性，有则开双栈
+  （`::/0` 路由 + `fake-ip-range6`），无则自动绕过为纯 IPv4 —— 避免把 IPv6-preferred
+  应用（YouTube 等）引上无出口的死路
+- **全局/智能模式修复**：节点选择同时下发到 `PROXY` 与 `GLOBAL` 组 —— mihomo 全局模式
+  走隐式 `GLOBAL` 组，若不设置会默认 `DIRECT` 导致全局模式全走直连
+- **分应用不走代理**：填包名（如抖音 `com.ss.hm.ugc.aweme`）→ `VpnConfig.blockedApplications`，
+  框架层让这些 App 流量完全绕过隧道直连（gvisor TUN 无法按进程名分流，故用框架层）
 - 首页：电源按钮（对齐原项目 `SsrvpnPowerButton`）、实时上传/下载速率与本次累计（轮询
   `/connections` 差值算速率）、公网 IPv4 查询
 - 诊断与运行日志：订阅页顶栏「日志」→ 居中弹窗（对齐原项目 `AppDiagnosticsView`），
   含诊断项检查、分级可读运行记录、技术明细（已脱敏）
 - GeoIP 分流：`geoip.metadb` 后台下载，缺失时自动降级跳过 `GEOIP` 规则避免启动失败
 - 规则：强制代理 / 强制直连站点、`DOMAIN-SUFFIX,cn`、GEOIP 兜底 `MATCH,PROXY`
+
+## 关于包体积（HAP ≈ 50MB）
+
+`entry/libs/arm64-v8a/libgojni.so` ≈ 48MB 占绝对大头，且已 `strip`（无调试段/符号表）、
+在 HAP 中未压缩存储（HarmonyOS 加载器要求 `.so` 不压缩以便 mmap 直读）。体积主要来自：
+
+1. **gVisor 用户态 TCP/IP 协议栈**（最大项）：鸿蒙沙箱无 `iptables`/内核 TUN offload，
+   只能用 gVisor 在用户态跑完整网络栈 —— 这是与 Android 原版（用内核 TUN + system stack）
+   最大的差异，Android 因此不需要 gVisor。
+2. 全量代理协议（VLESS/Reality/Hysteria2/TUIC/Sing-Box 兼容层等）与 TLS 栈。
+3. Go 运行期元数据（gopclntab / reflect，约 20MB `.data.rel.ro`）。
+
+可裁剪方向（按需）：`-tags no_tailscale` 去掉 tailscale 依赖树（约省 3–6MB）；进一步需
+源码级移除未用协议。当前版本为功能完整优先，未做激进裁剪。
 
 ## 仓库结构
 
