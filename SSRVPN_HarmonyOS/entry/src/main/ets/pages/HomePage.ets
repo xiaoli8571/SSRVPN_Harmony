@@ -17,9 +17,9 @@ import { CountryFlagIcon } from '../widgets/CountryFlagIcon';
 import { DiagnosticsSheet } from '../widgets/DiagnosticsSheet';
 import { PowerButton } from '../components/PowerButton';
 import { AppLogger } from '../commons/utils/AppLogger';
+import { AppInfo } from '../commons/utils/AppInfo';
 
 const TAG = 'HomePage';
-const APP_VERSION = '4.0.28';
 
 @CustomDialog
 struct AboutDialog {
@@ -29,7 +29,7 @@ struct AboutDialog {
   build() {
     Column({ space: 14 }) {
       Text('SSRVPN').fontSize(30).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
-      Text(`for HarmonyOS v${APP_VERSION}`).fontSize(13).fontColor(Ui.textTertiary)
+      Text(`for HarmonyOS v${AppInfo.version()}`).fontSize(13).fontColor(Ui.textTertiary)
       Text('Mihomo (Clash Meta) 客户端 · MIT License')
         .fontSize(12).fontColor(Ui.textSecondary)
       // 检查更新暂不启用（后续需要时再接入自有更新源）
@@ -565,7 +565,7 @@ struct HomePage {
       .shadow({ radius: 30, color: '#66000000', offsetY: 16 })
       .shadow({ radius: 20, color: '#242F5BFF', offsetY: 5 })
 
-      Text(`SSRVPN for HarmonyOS v${APP_VERSION}`)
+      Text(`SSRVPN for HarmonyOS v${AppInfo.version()}`)
         .fontSize(11).fontColor(Ui.textTertiary)
     }
     .width('92%')

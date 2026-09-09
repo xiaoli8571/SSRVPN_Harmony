@@ -17,8 +17,8 @@ import { AppSettings } from '../commons/models/AppSettings';
 import { AppLogger } from '../commons/utils/AppLogger';
 import { ConnectionOrchestrator } from '../commons/services/ConnectionOrchestrator';
 import { AppDiagnostics } from '../commons/models/PublicIpInfo';
+import { AppInfo } from '../commons/utils/AppInfo';
 const TAG = 'SubscriptionPage';
-const APP_VERSION = '4.0.28';
 
 /** 单条可读日志（对齐 upstream AppDiagnosticLogEntry 展示字段） */
 class ReadableLog {
@@ -985,7 +985,7 @@ struct SubscriptionPage {
       .shadow({ radius: 30, color: '#66000000', offsetY: 16 })
       .shadow({ radius: 20, color: '#242F5BFF', offsetY: 5 })
 
-      Text(`SSRVPN for HarmonyOS v${APP_VERSION}`)
+      Text(`SSRVPN for HarmonyOS v${AppInfo.version()}`)
         .fontSize(11).fontColor(Ui.textTertiary)
     }
     .width('92%')

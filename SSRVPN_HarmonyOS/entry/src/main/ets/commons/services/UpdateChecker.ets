@@ -4,9 +4,10 @@
  */
 import { http } from '@kit.NetworkKit';
 import { util } from '@kit.ArkTS';
+import { AppInfo } from '../utils/AppInfo';
 
-const CURRENT_VERSION = '4.0.28';
-const RELEASES_API = 'https://api.github.com/repos/Elegying/SSRVPN/releases/latest';
+// 本 HarmonyOS 移植版的发布仓库（Android 上游 Elegying/SSRVPN 版本号体系不同，不可比对）
+const RELEASES_API = 'https://api.github.com/repos/xiaoli8571/SSRVPN_Harmony/releases/latest';
 
 export class UpdateChecker {
   /** 返回最新版本号；无更新或网络失败返回 '' */
@@ -45,7 +46,25 @@ export class UpdateChecker {
     if (latest.length === 0) {
       return false;
     }
-    return latest !== UpdateChecker.normalize(CURRENT_VERSION);
+    return UpdateChecker.compare(latest, UpdateChecker.currentVersion()) > 0;
+  }
+
+  /** 点分数字版本比较: a>b → 1, a<b → -1, 相等/不可解析 → 0 */
+  static compare(a: string, b: string): number {
+    const pa = a.split('.').map((x) => parseInt(x) || 0);
+    const pb = b.split('.').map((x) => parseInt(x) || 0);
+    const len = Math.max(pa.length, pb.length);
+    for (let i = 0; i < len; i++) {
+      const va = i < pa.length ? pa[i] : 0;
+      const vb = i < pb.length ? pb[i] : 0;
+      if (va > vb) {
+        return 1;
+      }
+      if (va < vb) {
+        return -1;
+      }
+    }
+    return 0;
   }
 
   static normalize(tag: string): string {
@@ -53,6 +72,6 @@ export class UpdateChecker {
   }
 
   static currentVersion(): string {
-    return CURRENT_VERSION;
+    return UpdateChecker.normalize(AppInfo.version());
   }
 }

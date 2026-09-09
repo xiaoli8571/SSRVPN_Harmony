@@ -8,17 +8,19 @@
 import { http } from '@kit.NetworkKit';
 import { url, util } from '@kit.ArkTS';
 import { AppLogger } from '../utils/AppLogger';
+import { AppInfo } from '../utils/AppInfo';
 
 const TAG = 'SubscriptionFetchPolicy';
 
 /**
  * UA 顺序：优先 Clash 系 UA 让面板直接返回 Clash YAML（vmess/vless/trojan 字段最完整），
  * 其余 UA 依次兜底；解析层同时支持 vless/vmess/trojan 链接格式。
+ * SSRVPN 自家 UA 携带实时版本（AppInfo 单一来源, 不再硬编码）。
  */
 export const UA_CHAIN: string[] = [
   'clash-verge/v1.7.7',
   'clash.meta/v1.18.8',
-  'SSRVPN/4.0.28',
+  'SSRVPN/' + AppInfo.version(),
   'v2rayN/6.23',
   'Shadowrocket/2077'
 ];
