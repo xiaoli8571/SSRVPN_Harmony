@@ -746,7 +746,8 @@ struct SubscriptionPage {
       this.showError('订阅链接不能为空');
       return;
     }
-    if (!SubscriptionFetchPolicy.isValidSubscriptionUrl(url.trim())) {
+    // 本地 YAML 导入的订阅（local:// 源）允许改名；http/https 走完整 URL 校验
+    if (!url.trim().startsWith('local://') && !SubscriptionFetchPolicy.isValidSubscriptionUrl(url.trim())) {
       this.showError('请输入有效的订阅链接');
       return;
     }
