@@ -7,6 +7,7 @@
     { "name": "form_desc", "value": "SSRVPN 快捷开关卡片" },
     { "name": "vpn_permission_reason", "value": "SSRVPN 需要建立 VPN 隧道以提供代理功能" },
     { "name": "bg_task_reason", "value": "保持 VPN 连接在后台稳定运行" },
-    { "name": "notification_reason", "value": "显示 VPN 连接状态与流量速率" }
+    { "name": "notification_reason", "value": "显示 VPN 连接状态与流量速率" },
+    { "name": "shortcut_start_vpn", "value": "启动代理" }
   ]
 }

@@ -50,6 +50,8 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
   private connection: vpnExtension.VpnConnection | null = null;
   /** 心跳定时器（onDestroy 时清理） */
   private heartbeatTimer: number = -1;
+  /** 心跳文件所在目录（cleanup 时删除心跳文件用） */
+  private heartbeatDir: string = '';
   /** Protect socket 请求轮询器，由 Go 核心请求逐 socket 绕过 VPN。 */
   private protectTimer: number = -1;
   /** 后台长时任务是否已启动。 */
@@ -97,6 +99,7 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
   private startHeartbeat(configPath: string): void {
     this.stopHeartbeat();
     const dir = configPath.substring(0, configPath.lastIndexOf('/'));
+    this.heartbeatDir = dir;
     this.heartbeatTimer = setInterval(() => {
       try {
         const file = fs.openSync(`${dir}/${HEARTBEAT_FILE}`,
@@ -168,6 +171,15 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
   private async cleanupResourcesInternal(): Promise<void> {
     this.stopHeartbeat();
     this.stopProtectMonitor();
+    // 心跳定时器停止后删除心跳文件: 防止其他进程在 15s 陈旧窗口内把
+    // "已断开"误判为"内核还活着"(与 orchestrator.clearTunnelMarkers 双保险)。
+    if (this.heartbeatDir.length > 0) {
+      try {
+        fs.unlinkSync(`${this.heartbeatDir}/${HEARTBEAT_FILE}`);
+      } catch (e) {
+        // 已被 UI 侧删除属正常
+      }
+    }
     try {
       await coreBridge.stopCore();
     } catch (e) {

@@ -75,8 +75,10 @@ func (q *quicStreamPacketConn) close() (err error) {
 }
 
 func (q *quicStreamPacketConn) SetDeadline(t time.Time) error {
-	//TODO implement me
-	return nil
+	if err := q.SetReadDeadline(t); err != nil {
+		return err
+	}
+	return q.SetWriteDeadline(t)
 }
 
 func (q *quicStreamPacketConn) SetReadDeadline(t time.Time) error {
@@ -87,7 +89,6 @@ func (q *quicStreamPacketConn) SetReadDeadline(t time.Time) error {
 }
 
 func (q *quicStreamPacketConn) SetWriteDeadline(t time.Time) error {
-	//TODO implement me
 	return nil
 }
 

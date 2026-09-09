@@ -7,6 +7,7 @@
     { "name": "form_desc", "value": "SSRVPN quick toggle card" },
     { "name": "vpn_permission_reason", "value": "SSRVPN needs to establish a VPN tunnel to provide proxying" },
     { "name": "bg_task_reason", "value": "Keep the VPN connection stable in background" },
-    { "name": "notification_reason", "value": "Show VPN connection state and traffic speed" }
+    { "name": "notification_reason", "value": "Show VPN connection state and traffic speed" },
+    { "name": "shortcut_start_vpn", "value": "Start proxy" }
   ]
 }

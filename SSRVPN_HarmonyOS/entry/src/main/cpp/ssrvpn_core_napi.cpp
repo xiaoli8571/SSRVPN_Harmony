@@ -351,7 +351,7 @@ static napi_value AttachTunFd(napi_env env, napi_callback_info info)
     int fd = -1;
     int mtu = 0;
     bool ok = argc >= 2 && napi_get_value_int32(env, args[0], &fd) == napi_ok &&
-        napi_get_value_int32(env, args[1], &mtu) == napi_ok && fd >= 0 && mtu == 1400;
+        napi_get_value_int32(env, args[1], &mtu) == napi_ok && fd >= 0 && mtu > 0 && mtu <= 65535;
     if (ok) {
         g_tun_fd.store(fd);
         OH_LOG_Print(LOG_APP, LOG_INFO, 0, NAPI_LOG_TAG, "TUN descriptor attached");

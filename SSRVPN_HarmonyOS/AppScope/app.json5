@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "com.ssrvpn.client",
     "vendor": "SSRVPN",
-    "versionCode": 4034,
-    "versionName": "4.0.34",
+    "versionCode": 4037,
+    "versionName": "4.0.37",
     "icon": "$media:app_icon",
     "label": "$string:app_name"
   }

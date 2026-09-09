@@ -367,6 +367,11 @@ export class SubscriptionService {
 
   /** 更新订阅名称/URL（对应 upstream SubscriptionEditStatus.saved 持久化路径） */
   async updateSubscription(target: Subscription): Promise<void> {
+    const index = this.subscriptions.findIndex((s) => s.id === target.id);
+    if (index < 0) {
+      return;
+    }
+    this.subscriptions[index] = target;
     await this.persist();
   }
 

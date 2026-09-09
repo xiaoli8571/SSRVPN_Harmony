@@ -1,4 +1,4 @@
-# ---- DevEco / OpenHarmony build outputs ----
+﻿# ---- DevEco / OpenHarmony build outputs ----
 build/
 .hvigor/
 .cxx/
@@ -37,3 +37,9 @@ ssrvpn_go_build_*.log
 
 # keep prebuilt core library (enables clone-and-build without the Go toolchain)
 !entry/libs/**
+
+# ---- signing material & IDE native-assistant files (NEVER commit) ----
+material/
+*.csr
+.clangd
+.clang-tidy

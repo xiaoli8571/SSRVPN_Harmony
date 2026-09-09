@@ -1,8 +1,6 @@
 package sniffer
 
 import (
-	"errors"
-
 	"github.com/metacubex/mihomo/common/utils"
 	"github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/constant/sniffer"
@@ -25,7 +23,7 @@ func (*BaseSniffer) Protocol() string {
 
 // SniffData implements sniffer.Sniffer
 func (*BaseSniffer) SniffData(bytes []byte) (string, error) {
-	return "", errors.New("TODO")
+	return "", ErrorUnsupportedSniffer
 }
 
 // SupportNetwork implements sniffer.Sniffer

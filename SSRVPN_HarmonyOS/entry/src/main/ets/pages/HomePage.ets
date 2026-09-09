@@ -7,10 +7,11 @@ import { ConnectionOrchestrator, ConnState } from '../commons/services/Connectio
 import { SubscriptionService } from '../commons/services/SubscriptionService';
 import { SettingsService } from '../commons/services/SettingsService';
 import { PublicIpService } from '../commons/services/PublicIpService';
-import { PublicIpInfo } from '../commons/models/PublicIpInfo';
+import { PublicIpInfo, AppDiagnostics } from '../commons/models/PublicIpInfo';
 import { ProxyNode } from '../commons/models/ProxyNode';
 import { AppSettings } from '../commons/models/AppSettings';
 import { LatencyController } from '../commons/services/LatencyController';
+import { FormStateSync } from '../commons/services/FormStateSync';
 import { ConnectionSnapshot } from '../commons/services/SettingsService';
 import { NodeCountryPolicy } from '../commons/services/PublicIpService';
 import { CountryFlagIcon } from '../widgets/CountryFlagIcon';
@@ -112,11 +113,15 @@ struct HomePage {
   @State currentLatencyTick: number = 0; // 延迟缓存变化时触发重渲染
   @State showDiagnostics: boolean = false;
   @State diagTick: number = 0;
+  @State diagData: AppDiagnostics | null = null;
   @State upSpeed: number = 0;
   @State downSpeed: number = 0;
   @State upTotal: number = 0;
   @State downTotal: number = 0;
   @State buttonPressed: boolean = false;
+  /** 桌面长按快捷方式/服务卡片启动请求: EntryAbility 递增 seq + 写 mode, 这里消费 */
+  @StorageLink('vpn_request_seq') @Watch('onVpnRequest') vpnRequestSeq: number = 0;
+  private pageReady: boolean = false;
   private orchestrator: ConnectionOrchestrator = ConnectionOrchestrator.instance();
   private subs: SubscriptionService = new SubscriptionService();
   private settings: AppSettings = new AppSettings();
@@ -173,6 +178,46 @@ struct HomePage {
       || this.orchestrator.state === ConnState.RECOVERING;
     this.errorMessage = this.orchestrator.lastError;
     // 不再自动恢复连接: 打开应用保持断开状态, 由用户手动点击启动。
+    // 冷启动时快捷方式/卡片请求可能先于页面就绪写入, 这里兜底消费一次。
+    this.pageReady = true;
+    this.consumeVpnRequest();
+  }
+
+  /** @Watch: 页面存活期间(前台/后台)收到新请求即时响应 */
+  onVpnRequest(): void {
+    this.consumeVpnRequest();
+  }
+
+  private consumeVpnRequest(): void {
+    if (!this.pageReady) {
+      return;
+    }
+    const mode = AppStorage.get<string>('vpn_request_mode') ?? '';
+    if (mode.length === 0) {
+      return;
+    }
+    AppStorage.setOrCreate('vpn_request_mode', '');
+    if (mode === 'start') {
+      this.startConnectionIfNeeded();
+    } else if (mode === 'toggle') {
+      this.toggleConnection();
+    }
+  }
+
+  /** 快捷方式「启动代理」: 未连接才发起, 已连接/连接中保持现状 */
+  private async startConnectionIfNeeded(): Promise<void> {
+    if (this.isConnecting || this.isConnected) {
+      return;
+    }
+    const node = this.selectedNode();
+    if (node === null) {
+      promptAction.showToast({ message: '暂无可用节点，请先在「订阅」页添加并刷新' });
+      return;
+    }
+    const ok = await this.orchestrator.connect(node, this.subs);
+    if (ok) {
+      this.refreshPublicIp();
+    }
   }
 
   /** 对齐 HomeNodeController.resolveDefaultNode / resolveRuntimeSelectedNode 的简化实现 */
@@ -227,8 +272,18 @@ struct HomePage {
     return this.isConnected ? Ui.success : Ui.primary;
   }
 
-  private async refreshPublicIp(): Promise<void> {
-    this.publicIpRefreshing = true;
+  /** 打开/刷新诊断面板: 拉一次内核诊断并回填 @State (异步, 完成即重渲染) */
+  private refreshDiagnostics(): void {
+    this.diagTick = this.diagTick + 1;
+    this.orchestrator.diagnostics().then((d: AppDiagnostics) => {
+      this.diagData = d;
+      this.diagTick = this.diagTick + 1;
+    }).catch(() => {
+      this.diagData = null;
+    });
+  }
+
+  private async refreshPublicIp(): Promise<void> {    this.publicIpRefreshing = true;
     this.publicIpError = '';
     const info: PublicIpInfo = await PublicIpService.query();
     if (info.ip.length > 0) {
@@ -243,10 +298,12 @@ struct HomePage {
   private async toggleConnection(): Promise<void> {
     if (this.isConnecting) {
       await this.orchestrator.disconnect();
+      FormStateSync.pushState(getContext(this) as Context, '未连接');
       return;
     }
     if (this.isConnected) {
       await this.orchestrator.disconnect();
+      FormStateSync.pushState(getContext(this) as Context, '未连接');
       this.refreshPublicIp();
       return;
     }
@@ -256,6 +313,7 @@ struct HomePage {
       return;
     }
     const ok = await this.orchestrator.connect(node, this.subs);
+    FormStateSync.pushState(getContext(this) as Context, ok ? '已连接' : '未连接');
     if (ok) {
       this.refreshPublicIp();
     }
@@ -404,7 +462,10 @@ struct HomePage {
                   Text(this.errorMessage).fontSize(13).fontColor(Ui.error).layoutWeight(1)
                 }
                 .width('100%')
-                .onClick(() => { this.showDiagnostics = true; })
+                .onClick(() => {
+                  this.showDiagnostics = true;
+                  this.refreshDiagnostics();
+                })
               } else {
                 Row({ space: 6 }) {
                   if (this.publicIpRefreshing) {
@@ -443,10 +504,9 @@ struct HomePage {
           Blank()
           DiagnosticsSheet({
             darkMode: true,
-            diag: null,
+            diag: this.diagData,
             onRefresh: () => {
-              this.orchestrator.diagnostics();
-              this.diagTick = this.diagTick + 1;
+              this.refreshDiagnostics();
             },
             onClose: () => { this.showDiagnostics = false; }
           })

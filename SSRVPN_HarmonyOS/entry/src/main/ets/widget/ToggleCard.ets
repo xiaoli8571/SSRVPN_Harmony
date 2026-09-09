@@ -1,14 +1,16 @@
 /**
  * SSRVPN 服务卡片（2x2）：状态 + 一键连接/断开
  * 移植自 upstream VpnTileService 的快捷开关语义。
- * 通过 postCardAction 向 UIAbility 发送 router 事件，由 HomePage 轮询 card_toggle_requested 执行。
+ *
+ * 点击走 postCardAction 'message' → EntryFormAbility.onFormEvent（FormExtension
+ * 后台回调, 不拉起任何页面）→ VpnQuickStart 切换连接 → formProvider 回写卡片状态。
  */
 let storage = new LocalStorage();
 
 @Entry(storage)
 @Component
 struct ToggleCard {
-  @State stateText: string = '未连接';
+  @LocalStorageProp('state') stateText: string = '未连接';
 
   build() {
     Column({ space: 6 }) {
@@ -26,9 +28,8 @@ struct ToggleCard {
         .borderRadius(12)
         .onClick(() => {
           postCardAction(this, {
-            'action': 'router',
-            'abilityName': 'EntryAbility',
-            'params': { 'auto_connect': '1' }
+            'action': 'message',
+            'params': { 'command': 'toggle' }
           });
         })
     }

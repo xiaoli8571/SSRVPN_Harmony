@@ -92,6 +92,17 @@ export class ConnectionOrchestrator {
     this.context = context;
   }
 
+  /**
+   * 隧道是否存活。优先看进程内状态; 进程新起(单例状态丢失)时以扩展进程
+   * 心跳文件为准 —— 供桌面快捷方式/服务卡片等无页面入口判断"已连接"。
+   */
+  isTunnelAlive(): boolean {
+    if (this.state === ConnState.CONNECTED || this.state === ConnState.CONNECTING) {
+      return true;
+    }
+    return this.context !== null && this.isCoreAliveByHeartbeat();
+  }
+
   /** 配置变更后自动重启隧道：仅当前处于已连接/连接中时才断开并用同一节点重连
    *  （重连会重新生成含新 mode/规则/hosts 的 YAML 并重建带新 blockedApplications 的 TUN）。
    *  未连接时不动 —— 下次手动连接自然带上最新配置。 */
@@ -529,6 +540,24 @@ export class ConnectionOrchestrator {
       await vpnExtension.stopVpnExtensionAbility(want);
     } catch (e) {
       AppLogger.warn(TAG, `stopVpnExtensionAbility error: ${e}`);
+    }
+    // 立即清理心跳/启动标记文件: 否则断开后 15s 内心跳文件仍是"新鲜"的,
+    // isTunnelAlive() 会把"已断开"误判为"还活着" —— 真机实证: 卡片连续
+    // 开关两次后就再也启动不了(每次都被误判 alive 而走 disconnect 分支)。
+    this.clearTunnelMarkers();
+  }
+
+  private clearTunnelMarkers(): void {
+    if (this.context === null) {
+      return;
+    }
+    const dir = this.context.cacheDir;
+    for (const f of [HEARTBEAT_FILE, START_OK_FILE, START_ERROR_FILE]) {
+      try {
+        fs.unlinkSync(`${dir}/${f}`);
+      } catch (e) {
+        // 文件不存在属正常
+      }
     }
   }
 
