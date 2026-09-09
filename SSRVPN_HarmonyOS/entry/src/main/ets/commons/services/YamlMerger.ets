@@ -352,7 +352,7 @@ export class YamlMerger {
       'protocol', 'protocol-param', 'protocol_param', 'obfs', 'obfs-param', 'obfs_param',
       'uuid', 'alterId', 'alter-id', 'udp', 'network', 'tls', 'servername', 'sni',
       'skip-cert-verify', 'flow', 'client-fingerprint', 'reality-opts', 'ws-opts', 'grpc-opts',
-      'up', 'down', 'alpn', 'obfs-password', 'fingerprint'
+      'up', 'down', 'upmbps', 'downmbps', 'alpn', 'obfs-password', 'fingerprint'
     ]);
     const body = text.startsWith('- ') ? text.substring(2) : text;
     if (body.trimStart().startsWith('{')) {
@@ -474,8 +474,8 @@ export class YamlMerger {
       p.clientFingerprint = fields.get('fingerprint') ?? '';
     }
     if (proxyType === 'hysteria2') {
-      p.hyUp = YamlMerger.normalizeBandwidth(fields.get('up') ?? '');
-      p.hyDown = YamlMerger.normalizeBandwidth(fields.get('down') ?? '');
+      p.hyUp = YamlMerger.normalizeBandwidth(fields.get('up') ?? fields.get('upmbps') ?? '');
+      p.hyDown = YamlMerger.normalizeBandwidth(fields.get('down') ?? fields.get('downmbps') ?? '');
       p.alpnList = YamlMerger.normalizeAlpnList(fields.get('alpn') ?? '');
     }
     try {

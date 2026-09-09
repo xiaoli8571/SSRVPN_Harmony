@@ -5,7 +5,7 @@
  */
 export class AppTheme {
   // ── 品牌色 ──
-  static readonly primaryColor: string = '#2F6BFF';
+  static readonly primaryColor: string = '#2E64E6';
   static readonly primaryLight: string = '#5B8CFF';
   static readonly primaryDark: string = '#1E49D8';
   static readonly accentColor: string = '#14B8A6';
@@ -15,7 +15,7 @@ export class AppTheme {
   static readonly successLight: string = '#34D399';
   static readonly successMuted: string = '#0E7A3E';
   static readonly warningColor: string = '#F59E0B';
-  static readonly errorColor: string = '#EF4444';
+  static readonly errorColor: string = '#F87171';
 
   // ── 暗色主题（默认） ──
   static readonly darkBg: string = '#08090B';
@@ -26,7 +26,7 @@ export class AppTheme {
   static readonly darkBorderLight: string = '#3A414D';
   static readonly darkTextPrimary: string = '#F4F6F8';
   static readonly darkTextSecondary: string = '#A4ACB8';
-  static readonly darkTextHint: string = '#717B8A';
+  static readonly darkTextHint: string = '#8A94A6';
 
   // ── 亮色主题 ──
   static readonly lightBg: string = '#F4F6F8';

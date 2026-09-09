@@ -14,7 +14,8 @@ import { AppSettings } from '../models/AppSettings';
 export class ClashConfigGenerator {
   static generate(selectedNode: ProxyNode, allNodes: ProxyNode[], settings: AppSettings,
     mixedPort: number, apiPort: number, apiSecret: string, useGeoip: boolean = true,
-    ipv6Enabled: boolean = false, proxyHosts: Record<string, string> = {}): string {
+    ipv6Enabled: boolean = false, proxyHosts: Record<string, string> = {},
+    tunEnabled: boolean = true): string {
     const lines: string[] = [];
 
     lines.push('mixed-port: ' + mixedPort);
@@ -57,7 +58,8 @@ export class ClashConfigGenerator {
     lines.push('    - 119.29.29.29');
     lines.push('');
     lines.push('tun:');
-    lines.push('  enable: true');
+    // headless 测速模式: tun.enable=false, 内核只开 mixed/API 端口, 不建隧道不碰 VPN 权限
+    lines.push('  enable: ' + (tunEnabled ? 'true' : 'false'));
     lines.push('  stack: gvisor');  // fd 注入 + 沙箱无 iptables, 只有 gvisor 可用
     // DNS 覆写(TUN 层): 所有目标端口 53 的 DNS 请求一律劫持进内核解析。
     lines.push('  dns-hijack:');

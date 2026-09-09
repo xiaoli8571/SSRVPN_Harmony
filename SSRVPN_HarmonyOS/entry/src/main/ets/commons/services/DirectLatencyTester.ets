@@ -14,15 +14,24 @@
  * (测不出≠死了), 因此 obfs 节点仍返回 -2 未测试。
  */
 import { socket } from '@kit.NetworkKit';
+import { util } from '@kit.ArkTS';
 import { ProxyNode } from '../models/ProxyNode';
 import { AppLogger } from '../utils/AppLogger';
 
 const TAG = 'DirectLatencyTester';
 const TCP_TIMEOUT_MS = 4000;
 const QUIC_TIMEOUT_MS = 2500;
+const TLS_TIMEOUT_MS = 3000;
 
 export class DirectLatencyTester {
-  /** 直连测试单个节点: TCP 毫秒数 / hy2 QUIC 探测毫秒数; 失败 -1; 无法离线探测 -2 */
+  /** 直连测试单个节点: 毫秒数; 失败 -1; 无法离线探测 -2。
+   *  分级策略(回应"IP通就算正常?"的误报):
+   *   - hysteria2 → QUIC Initial 探测(收版本协商包)
+   *   - tls: true → TCP 连上后再发真实 TLS ClientHello(带 SNI), 必须收到
+   *     ServerHello/Alert 等任何 TLS 记录才算存活 —— 只测 TCP 会把
+   *     "端口开着但 TLS 层已死"的假活节点误判为正常
+   *   - 其余(ss/ssr/明文) → TCP 握手(无更高层可探, 结果仅代表服务器可达)
+   */
   static async testNode(node: ProxyNode): Promise<number> {
     if (node.server.length === 0 || node.port <= 0 || node.port >= 65536) {
       return -1;
@@ -33,7 +42,115 @@ export class DirectLatencyTester {
       }
       return DirectLatencyTester.probeQuic(node);
     }
+    if (node.tls && node.realityPublicKey.length === 0) {
+      // reality 节点对非 uTLS 指纹的裸 ClientHello 可能静默不回包, 误杀率高, 走 TCP
+      return DirectLatencyTester.probeTls(node);
+    }
     return DirectLatencyTester.probeTcp(node);
+  }
+
+  /** 组装带 SNI 的 TLS1.2/1.3 ClientHello（任何合规 TLS 栈都必须回包） */
+  private static buildClientHello(sni: string): ArrayBuffer {
+    const nameBytes = new util.TextEncoder().encodeInto(sni);
+    const suites: number[] = [0x1301, 0x1302, 0x1303, 0xC02C, 0xC02B, 0xC030, 0xC02F,
+      0xC024, 0xC023, 0xC028, 0xC027, 0xC00A, 0xC014, 0x009E, 0x009C, 0x003D, 0x003C, 0x002F];
+    const ext: number[] = [];
+    const pushExt = (type: number, body: number[]): void => {
+      ext.push((type >> 8) & 0xFF, type & 0xFF, (body.length >> 8) & 0xFF, body.length & 0xFF);
+      for (const b of body) {
+        ext.push(b);
+      }
+    };
+    const sniBody: number[] = [0x00, (nameBytes.length >> 8) & 0xFF, nameBytes.length & 0xFF, 0x00,
+      (nameBytes.length >> 8) & 0xFF, nameBytes.length & 0xFF];
+    for (let i = 0; i < nameBytes.length; i++) {
+      sniBody.push(nameBytes[i]);
+    }
+    const sniListLen = sniBody.length;
+    pushExt(0x0000, [(sniListLen >> 8) & 0xFF, sniListLen & 0xFF].concat(sniBody));
+    pushExt(0x002B, [0x02, 0x03, 0x04]);                                  // supported_versions TLS1.3
+    pushExt(0x000D, [0x00, 0x08, 0x04, 0x03, 0x08, 0x04, 0x04, 0x01, 0x05, 0x03]); // sig algs
+    pushExt(0x000A, [0x00, 0x06, 0x00, 0x1D, 0x00, 0x17, 0x00, 0x18]);    // groups x25519/P256/P384
+    pushExt(0x000B, [0x01, 0x00]);                                          // ec_point_formats
+    pushExt(0x0010, [0x00, 0x0E, 0x00, 0x02, 0x68, 0x32, 0x00, 0x08, 0x68, 0x74, 0x74, 0x70,
+      0x2F, 0x31, 0x2E, 0x31]);                                             // ALPN h2/http1.1
+    const body: number[] = [];
+    body.push(0x03, 0x03);
+    for (let i = 0; i < 32; i++) {
+      body.push((i * 7 + 3) & 0xFF);
+    }
+    body.push(0x00);
+    const suitesLen = suites.length * 2;
+    body.push((suitesLen >> 8) & 0xFF, suitesLen & 0xFF);
+    for (const s of suites) {
+      body.push((s >> 8) & 0xFF, s & 0xFF);
+    }
+    body.push(0x01, 0x00);
+    const extLen = ext.length;
+    body.push((extLen >> 8) & 0xFF, extLen & 0xFF);
+    for (const e of ext) {
+      body.push(e);
+    }
+    const hsLen = body.length + 4;
+    const record: number[] = [];
+    record.push(0x16, 0x03, 0x01);
+    const recLen = hsLen + 4 + 3;
+    record.push((recLen >> 8) & 0xFF, recLen & 0xFF);
+    record.push(0x01, (hsLen >> 16) & 0xFF, (hsLen >> 8) & 0xFF, hsLen & 0xFF);
+    for (const b of body) {
+      record.push(b);
+    }
+    return new Uint8Array(record).buffer as ArrayBuffer;
+  }
+
+  /** TLS 探测: TCP 连接 + ClientHello, 收到任何回包(ServerHello/Alert)才算存活 */
+  private static probeTls(node: ProxyNode): Promise<number> {
+    const tcp = socket.constructTCPSocketInstance();
+    const sni = node.servername.length > 0 ? node.servername : node.server;
+    const ch = DirectLatencyTester.buildClientHello(sni);
+    const start = Date.now();
+    return new Promise<number>((resolve) => {
+      let settled = false;
+      let timerId = -1;
+      const finish = (value: number): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timerId >= 0) {
+          clearInterval(timerId);
+        }
+        try {
+          tcp.off('message');
+        } catch (e) {
+          // ignore
+        }
+        try {
+          tcp.close();
+        } catch (e) {
+          // ignore
+        }
+        resolve(value);
+      };
+      tcp.on('message', () => {
+        finish(Date.now() - start);
+      });
+      tcp.connect({
+        address: { address: node.server, port: node.port, family: 1 },
+        timeout: TCP_TIMEOUT_MS
+      } as socket.TCPConnectOptions).then(() => {
+        tcp.send({ data: ch } as socket.TCPSendOptions).catch(() => {
+          finish(-1);
+        });
+      }).catch(() => {
+        finish(-1);
+      });
+      timerId = setInterval(() => {
+        if (Date.now() - start >= TCP_TIMEOUT_MS + TLS_TIMEOUT_MS) {
+          finish(-1);
+        }
+      }, 150);
+    });
   }
 
   /** TCP 握手探测（原实现） */

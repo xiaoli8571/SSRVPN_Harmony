@@ -17,11 +17,14 @@ const TAG = 'SubscriptionService';
 const PREF_NAME = 'ssrvpn_subscriptions';
 const KEY_SUBS = 'subscriptions_json';
 const KEY_NODES = 'nodes_json';
+const KEY_HIDDEN = 'hidden_nodes_json';
 
 export class SubscriptionService {
   private store: preferences.Preferences | null = null;
   subscriptions: Subscription[] = [];
   nodes: ProxyNode[] = [];
+  /** 用户手动删除的节点指纹清单: 订阅刷新时过滤, 防止已删节点"复活" */
+  private hiddenNodes: string[] = [];
   /** 撤销记录（对应 subscription_undo_record.dart）：最近一次删除的订阅与节点 */
   private undoSnapshot: SubscriptionUndoSnapshot | null = null;
 
@@ -29,6 +32,7 @@ export class SubscriptionService {
     this.store = await preferences.getPreferences(context, PREF_NAME);
     this.subscriptions = [];
     this.nodes = [];
+    this.hiddenNodes = [];
 
     try {
       const subsRaw = await this.store.get(KEY_SUBS, '[]') as string;
@@ -44,7 +48,45 @@ export class SubscriptionService {
       AppLogger.warn(TAG, 'invalid nodes preferences ignored');
     }
 
+    try {
+      const hiddenRaw = await this.store.get(KEY_HIDDEN, '[]') as string;
+      const arr = JSON.parse(hiddenRaw) as string[];
+      if (Array.isArray(arr)) {
+        this.hiddenNodes = arr.filter((x): boolean => typeof x === 'string');
+      }
+    } catch (e) {
+      AppLogger.warn(TAG, 'invalid hidden nodes preferences ignored');
+    }
+
     AppLogger.info(TAG, `loaded ${this.subscriptions.length} subscriptions, ${this.nodes.length} nodes`);
+  }
+
+  /** 节点稳定指纹（跨刷新不变, 用于删除记忆） */
+  static nodeKey(n: ProxyNode): string {
+    return `${n.subscriptionId}|${n.server}|${n.port}|${n.name}`;
+  }
+
+  /**
+   * 删除单个节点（订阅页长按）: 从列表移除并记入隐藏清单,
+   * 后续订阅刷新自动过滤; 手动直连节点同样支持（重新导入链接可再次添加）。
+   */
+  async removeNode(nodeId: string): Promise<boolean> {
+    const n = this.findNode(nodeId);
+    if (n === null) {
+      return false;
+    }
+    const key = SubscriptionService.nodeKey(n);
+    if (!this.hiddenNodes.includes(key)) {
+      this.hiddenNodes.push(key);
+    }
+    this.nodes = this.nodes.filter((x) => x.id !== nodeId);
+    const sub = this.subscriptions.find((s) => s.id === n.subscriptionId);
+    if (sub !== undefined) {
+      sub.nodeCount = this.nodesOf(sub.id).length;
+    }
+    await this.persist();
+    AppLogger.info(TAG, `node removed: ${n.name} (hidden total ${this.hiddenNodes.length})`);
+    return true;
   }
 
   private static validString(value: Object, maxLength: number, allowEmpty: boolean = true): boolean {
@@ -249,6 +291,7 @@ export class SubscriptionService {
     }
     await this.store.put(KEY_SUBS, JSON.stringify(subsJson));
     await this.store.put(KEY_NODES, JSON.stringify(SubscriptionService.nodesToJson(this.nodes)));
+    await this.store.put(KEY_HIDDEN, JSON.stringify(this.hiddenNodes));
     await this.store.flush();
   }
 
@@ -295,6 +338,10 @@ export class SubscriptionService {
     if (sub === undefined) {
       return SubscriptionRefreshResult.fail(SubscriptionRefreshStatus.HTTP_ERROR, 'subscription not found');
     }
+    // 本地 YAML 导入的伪订阅: 无网络源, 刷新按现有节点数报成功(幂等, 不打网络)
+    if (sub.url.startsWith('local://')) {
+      return SubscriptionRefreshResult.ok(this.nodesOf(id).length);
+    }
     try {
       const body = await SubscriptionFetchPolicy.fetch(sub.url, sub.headerName, sub.headerValue);
 
@@ -326,6 +373,10 @@ export class SubscriptionService {
         return SubscriptionRefreshResult.fail(SubscriptionRefreshStatus.PARSE_ERROR,
           '内容未解析出节点（支持 ss/ssr/vless/vmess/trojan 与 Clash YAML）');
       }
+      // 用户手动删除过的节点: 刷新后不再复活
+      if (this.hiddenNodes.length > 0) {
+        parsed = parsed.filter((n) => !this.hiddenNodes.includes(SubscriptionService.nodeKey(n)));
+      }
       this.nodes = this.nodes.filter((n) => n.subscriptionId !== id).concat(parsed);
       sub.nodeCount = parsed.length;
       sub.lastFetchedAt = Date.now();
@@ -338,6 +389,51 @@ export class SubscriptionService {
       const msg = e instanceof Error ? e.message : String(e);
       return SubscriptionRefreshResult.fail(SubscriptionRefreshStatus.NETWORK_ERROR, msg);
     }
+  }
+
+  /**
+   * 导入本地 YAML 文件（订阅页"导入文件"入口）: 建 local:// 伪订阅,
+   * 复用与网络订阅完全相同的解析链（Clash YAML proxies / base64 链接列表 /
+   * 明文链接行, 含 hysteria2 全协议）。返回导入节点数, 0=解析失败。
+   */
+  async addLocalYaml(fileName: string, content: string): Promise<number> {
+    const base = fileName.replace(/\.(ya?ml|txt)$/i, '');
+    const trimmed = content.trim();
+    if (trimmed.length === 0) {
+      return 0;
+    }
+    const sub = Subscription.newSubscription(util.generateRandomUUID(),
+      `本地:${base.length > 0 ? base : '订阅'}`, `local://${base}`);
+    sub.sortOrder = this.subscriptions.length;
+    let parsed: ProxyNode[];
+    try {
+      if (trimmed.includes('proxies:')) {
+        const merged: MergedProxy[] = YamlMerger.merge([trimmed], sub.name, '');
+        parsed = SubscriptionService.mergedToNodes(merged, sub.id);
+        if (this.store !== null) {
+          await this.store.put(`yaml_cache_${sub.id}`, YamlMerger.toYaml(merged));
+        }
+      } else {
+        parsed = SubscriptionParser.parse(trimmed, sub.id);
+      }
+    } catch (e) {
+      AppLogger.warn(TAG, `local yaml parse failed: ${e instanceof Error ? e.message : String(e)}`);
+      return 0;
+    }
+    if (parsed.length === 0) {
+      return 0;
+    }
+    if (this.hiddenNodes.length > 0) {
+      parsed = parsed.filter((n) => !this.hiddenNodes.includes(SubscriptionService.nodeKey(n)));
+    }
+    this.subscriptions.push(sub);
+    this.nodes = this.nodes.concat(parsed);
+    sub.nodeCount = parsed.length;
+    sub.lastFetchedAt = Date.now();
+    sub.lastRefreshResult = SubscriptionRefreshStatus.OK;
+    await this.persist();
+    AppLogger.info(TAG, `local yaml imported: ${sub.name} (${parsed.length} nodes)`);
+    return parsed.length;
   }
 
   nodesOf(subscriptionId: string): ProxyNode[] {

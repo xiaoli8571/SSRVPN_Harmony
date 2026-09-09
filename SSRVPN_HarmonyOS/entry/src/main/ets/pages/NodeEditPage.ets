@@ -94,7 +94,7 @@ struct NodeEditPage {
             .fontSize(17).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
           Blank()
           Text('保存')
-            .fontSize(15).fontColor(Ui.primaryBlue)
+            .fontSize(15).fontColor(Ui.textBlue)
             .onClick(() => this.save())
         }
         .width('100%')
@@ -115,7 +115,7 @@ struct NodeEditPage {
                   .width('100%')
                   .height(44)
                   .backgroundColor(Ui.surfaceStrong)
-                  .fontColor(Ui.primary)
+                  .fontColor(Ui.textViolet)
                   .borderRadius(12)
                   .onClick(() => this.importFromUri())
               }

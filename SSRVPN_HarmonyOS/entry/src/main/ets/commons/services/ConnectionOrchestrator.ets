@@ -214,8 +214,124 @@ export class ConnectionOrchestrator {
     return age >= 0 && age < HEARTBEAT_STALE_MS;
   }
 
+  /** headless 测速内核: 未连接时预启动真实协议栈做端到端测速 */
+  testCoreActive: boolean = false;
+  private testCoreSecret: string = '';
+
+  /**
+   * 确保 headless 测速内核在跑（不建 TUN、不请求 VPN 授权）:
+   * 复用同一份生成配置(tun.enable=false) + DoH pin 结果, 内核起来后
+   * /proxies/{name}/delay 走的就是节点真实协议路径 —— 彻底解决
+   * "TCP 测通但连上 VPN 后超时"的离线测速误报。
+   */
+  async ensureTestCore(subs: SubscriptionService, settings: AppSettings): Promise<boolean> {
+    if (this.testCoreActive) {
+      return true;
+    }
+    if (this.context === null || subs.nodes.length === 0) {
+      return false;
+    }
+    try {
+      const domains: string[] = [];
+      for (const n of subs.nodes) {
+        const s = n.server;
+        if (s.length === 0 || s.includes(':') || /^\d+\.\d+\.\d+\.\d+$/.test(s)) {
+          continue;
+        }
+        domains.push(s);
+      }
+      let hosts: Record<string, string> = {};
+      try {
+        hosts = await DoHResolver.resolveMany(domains, 4000);
+      } catch (e) {
+        AppLogger.warn(TAG, `test-core DoH pre-resolve failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      this.testCoreSecret = `ssr-test-${Date.now().toString(36)}-${Math.floor(Math.random() * 0x7FFFFFFF).toString(36)}`;
+      // geoip 缺失时不生成 GEOIP 规则(同 connect), 否则内核启动会联网下载 MMDB 卡死
+      let testGeoip = false;
+      try {
+        testGeoip = fs.statSync(`${this.context.cacheDir}/geoip.metadb`).size > 0;
+      } catch (e) {
+        testGeoip = false;
+      }
+      const yaml = ClashConfigGenerator.generate(subs.nodes[0], subs.nodes, settings,
+        MIXED_PORT, API_PORT, this.testCoreSecret, testGeoip, false, hosts, false);
+      const configPath = `${this.context.cacheDir}/mihomo_test_config.yaml`;
+      const file = fs.openSync(configPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      try {
+        fs.writeSync(file.fd, yaml);
+      } finally {
+        fs.closeSync(file);
+      }
+      this.clearStartError();
+      const stopWant: Want = {
+        bundleName: 'com.ssrvpn.client',
+        abilityName: 'VpnExtensionAbility'
+      };
+      try {
+        await vpnExtension.stopVpnExtensionAbility(stopWant);
+      } catch (e) {
+        // 未运行属正常
+      }
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), 600));
+      const want: Want = {
+        bundleName: 'com.ssrvpn.client',
+        abilityName: 'VpnExtensionAbility',
+        parameters: {
+          configPath: configPath,
+          headless: 1
+        }
+      };
+      await Promise.race([
+        vpnExtension.startVpnExtensionAbility(want),
+        new Promise<void>((resolve, reject) => {
+          setTimeout(() => {
+            reject(new Error('测速内核拉起超时'));
+          }, 15000);
+        })
+      ]);
+      this.api.setEndpoint(API_PORT, this.testCoreSecret);
+      const deadline = Date.now() + 20000;
+      while (Date.now() < deadline) {
+        const extErr = this.readStartError();
+        if (extErr.length > 0) {
+          throw new Error(`测速内核启动失败: ${extErr}`);
+        }
+        if (this.readStartOk() && await this.api.healthProbe()) {
+          this.testCoreActive = true;
+          AppLogger.info(TAG, 'headless test core ready');
+          return true;
+        }
+        await new Promise<void>((resolve) => setTimeout(() => resolve(), 300));
+      }
+      throw new Error('测速内核就绪超时(20s)');
+    } catch (e) {
+      AppLogger.warn(TAG, `ensureTestCore failed: ${e instanceof Error ? e.message : String(e)}`);
+      this.testCoreActive = false;
+      return false;
+    }
+  }
+
+  async stopTestCore(): Promise<void> {
+    if (!this.testCoreActive) {
+      return;
+    }
+    this.testCoreActive = false;
+    try {
+      const stopWant: Want = {
+        bundleName: 'com.ssrvpn.client',
+        abilityName: 'VpnExtensionAbility'
+      };
+      await vpnExtension.stopVpnExtensionAbility(stopWant);
+    } catch (e) {
+      AppLogger.warn(TAG, `stopTestCore error: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   async connect(node: ProxyNode, subs: SubscriptionService): Promise<boolean> {
     const seq = ++this.connectSeq;
+    // 真实连接会重启扩展进程, headless 测速内核随之失效
+    this.testCoreActive = false;
     this.state = ConnState.CONNECTING;
     this.lastError = '';
     this.lastSubs = subs;
@@ -365,7 +481,17 @@ export class ConnectionOrchestrator {
           bypassPackages: settings.excludedApps.join(',')
         }
       };
-      await vpnExtension.startVpnExtensionAbility(want);
+      // 关键防护: startVpnExtensionAbility 的 Promise 在系统授权链路异常时
+      // (真机实证: checkVpnPermission datashare Query error → vpndialog 后无响应)
+      // 可能永不 resolve —— 加 15s 竞速超时, 保证 UI 不会无限转圈。
+      await Promise.race([
+        vpnExtension.startVpnExtensionAbility(want),
+        new Promise<void>((resolve, reject) => {
+          setTimeout(() => {
+            reject(new Error('VPN 扩展拉起超时（15s）：系统授权弹窗未完成或扩展无法启动，请重试'));
+          }, 15000);
+        })
+      ]);
 
       this.api.resetTrafficBaseline();
       this.api.setEndpoint(API_PORT, this.apiSecret);

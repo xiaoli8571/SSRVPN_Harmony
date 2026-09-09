@@ -590,8 +590,9 @@ export class ModernUriCodec {
     node.obfs = query.get('obfs') ?? '';
     node.obfsParam = query.get('obfs-password') ?? '';
     node.clientFingerprint = query.get('pinSHA256') ?? '';
-    node.hyUp = ModernUriCodec.normalizeHyBandwidth(query.get('up') ?? '');
-    node.hyDown = ModernUriCodec.normalizeHyBandwidth(query.get('down') ?? '');
+    // 带宽参数兼容 up/down 与 upmbps/downmbps 两种面板写法
+    node.hyUp = ModernUriCodec.normalizeHyBandwidth(query.get('up') ?? query.get('upmbps') ?? '');
+    node.hyDown = ModernUriCodec.normalizeHyBandwidth(query.get('down') ?? query.get('downmbps') ?? '');
     node.alpnList = ModernUriCodec.normalizeAlpn(query.get('alpn') ?? '');
     node.rawUri = 'hysteria2://' + body;
     node.rawYaml = '';

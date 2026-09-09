@@ -88,9 +88,12 @@ export class SubscriptionFetchPolicy {
     }
   }
 
-  /** 订阅 URL 合法性：仅允许公开 HTTPS 地址，阻止明文传输和常见 SSRF 目标。 */
+  /** 订阅 URL 合法性：允许 http/https 公开地址（大量机场面板仍是 http + 非标端口），
+   *  继续拦截内网/回环/组播等 SSRF 目标。 */
   static isValidSubscriptionUrl(urlStr: string): boolean {
-    if (urlStr.length === 0 || urlStr.length > 8192 || !urlStr.toLowerCase().startsWith('https://')
+    const lower = urlStr.toLowerCase();
+    if (urlStr.length === 0 || urlStr.length > 8192
+      || (!lower.startsWith('https://') && !lower.startsWith('http://'))
       || urlStr.includes('\n') || urlStr.includes('\r') || urlStr.includes('\t')) {
       return false;
     }
@@ -98,7 +101,7 @@ export class SubscriptionFetchPolicy {
       const parsed = url.URL.parseURL(urlStr);
       const proto = parsed.protocol.replace(/:/g, '').toLowerCase();
       let authority = parsed.host.toLowerCase();
-      if (proto !== 'https' || authority.length === 0 || authority.includes('@')) {
+      if ((proto !== 'https' && proto !== 'http') || authority.length === 0 || authority.includes('@')) {
         return false;
       }
 
@@ -127,7 +130,8 @@ export class SubscriptionFetchPolicy {
           port = authority.substring(colon + 1);
         }
       }
-      if (host.length === 0 || (port.length > 0 && port !== '443')) {
+      if (host.length === 0 || (port.length > 0 && (!/^\d{1,5}$/.test(port)
+        || parseInt(port) <= 0 || parseInt(port) > 65535))) {
         return false;
       }
 

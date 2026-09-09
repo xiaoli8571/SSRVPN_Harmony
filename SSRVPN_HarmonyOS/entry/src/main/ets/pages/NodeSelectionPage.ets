@@ -31,6 +31,44 @@ interface SubChip {
 /** 站点列表编辑对话框（强制代理/强制直连共用）。
  *  输入框用深色主题: 比弹窗底更深的蓝黑 + 浅色文字 + 紫色光标, 可读且不突兀。 */
 @CustomDialog
+struct NodeDeleteDialog {
+  controller?: CustomDialogController;
+  getNodeName: () => string = (): string => '';
+  onConfirm: () => void = () => {};
+
+  build() {
+    Column({ space: 14 }) {
+      Text('删除节点').fontSize(17).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
+      Text(`确定删除「${this.getNodeName()}」吗？该节点在订阅刷新后不会再出现。`)
+        .fontSize(13).fontColor(Ui.textSecondary)
+      Row({ space: 12 }) {
+        Button('取消')
+          .layoutWeight(1).backgroundColor(Ui.surface).fontColor(Ui.textSecondary)
+          .onClick(() => {
+            if (this.controller !== undefined) {
+              this.controller.close();
+            }
+          })
+        Button('删除')
+          .layoutWeight(1).backgroundColor(Ui.error).fontColor(Color.White)
+          .onClick(() => {
+            if (this.controller !== undefined) {
+              this.controller.close();
+            }
+            this.onConfirm();
+          })
+      }
+      .width('100%')
+    }
+    .padding(22)
+    .borderRadius(20)
+    .backgroundColor('#F0242641')
+    .borderWidth(1)
+    .borderColor(Ui.border)
+  }
+}
+
+@CustomDialog
 struct SiteListDialog {
   controller?: CustomDialogController;
   title: string = '';
@@ -72,7 +110,7 @@ struct SiteListDialog {
           })
         Button('保存')
           .layoutWeight(1)
-          .backgroundColor(Ui.primaryBlue)
+          .backgroundColor(Ui.primaryBlueFill)
           .fontColor(Color.White)
           .onClick(() => {
             const sites = this.sitesText.split(/\r?\n/)
@@ -104,6 +142,23 @@ struct NodeSelectionPage {
   @State selectedName: string = '';
   @State testingName: string = '';
   @State batchTesting: boolean = false;
+  /** 批量测速完成后按延迟升序重排列表 */
+  @State sortByLatency: boolean = false;
+  /** 长按删除节点目标 */
+  @State deleteTargetName: string = '';
+  private deleteTargetId: string = '';
+  private deleteNodeDialog: CustomDialogController = new CustomDialogController({
+    builder: NodeDeleteDialog({
+      getNodeName: (): string => this.deleteTargetName,
+      onConfirm: () => {
+        this.doDeleteNode();
+      }
+    }),
+    autoCancel: true
+  });
+  /** headless 测速内核: 未连接时预启动真实协议栈, 每页会话只尝试一次 */
+  private testCoreTried: boolean = false;
+  private testCoreOk: boolean = false;
   @State refreshing: boolean = false;
   @State isConnected: boolean = false;
   @State latencyTick: number = 0;
@@ -163,6 +218,15 @@ struct NodeSelectionPage {
     this.bootstrap();
   }
 
+  /** 离开节点页即回收测速内核（它是临时进程，不该在后台常驻） */
+  onPageHide(): void {
+    if (this.testCoreOk || this.testCoreTried) {
+      this.testCoreOk = false;
+      this.testCoreTried = false;
+      this.orchestrator.stopTestCore();
+    }
+  }
+
   private async bootstrap(): Promise<void> {
     const ctx = getContext(this) as Context;
     this.orchestrator.init(ctx);
@@ -173,6 +237,11 @@ struct NodeSelectionPage {
     this.settings = await SettingsService.load();
     this.proxyMode = this.settings.proxyMode === 'global' ? 'global' : 'rule';
     this.isConnected = this.orchestrator.state === ConnState.CONNECTED;
+    if (this.isConnected) {
+      // 真实 VPN 已接管扩展进程, headless 测速内核标记复位
+      this.testCoreTried = false;
+      this.testCoreOk = false;
+    }
     this.selectedName = this.settings.preferredNodeId.length > 0 && this.subs.findNode(this.settings.preferredNodeId) !== null
       ? this.subs.findNode(this.settings.preferredNodeId)!.name
       : (this.subs.nodes.length > 0 ? this.subs.nodes[0].name : '');
@@ -220,7 +289,34 @@ struct NodeSelectionPage {
       };
       rows.push(row);
     }
+    if (this.sortByLatency) {
+      // 批量测速完成后: 已测成功升序 → 未测 → 失败沉底
+      rows.sort((a: NodeRow, b: NodeRow): number => {
+        const la = LatencyController.latencyFor(a.node.name);
+        const lb = LatencyController.latencyFor(b.node.name);
+        const ra = this.latencyRank(la);
+        const rb = this.latencyRank(lb);
+        if (ra !== rb) {
+          return ra - rb;
+        }
+        if (ra === 0 && la !== null && lb !== null) {
+          return la - lb;
+        }
+        return 0;
+      });
+    }
     this.nodes = rows;
+  }
+
+  /** 排序权重: 0=有延迟值 1=未测/不支持 2=失败(-1) */
+  private latencyRank(latency: number | null): number {
+    if (latency === null || latency === -2) {
+      return 1;
+    }
+    if (latency < 0) {
+      return 2;
+    }
+    return 0;
   }
 
   /** 刷新: 全部订阅重新拉取并重建节点列表(对齐原版顶栏刷新图标职责) */
@@ -259,14 +355,47 @@ struct NodeSelectionPage {
     this.testingName = '';
   }
 
-  /** 未连接时走直连测速(内核未启动 API 不存在): TCP 握手 / hy2 QUIC Initial 探测,
-   *  tester 返回 -2 表示该节点协议无法离线探测(如带 obfs 的 hy2), 保持未测试态。
-   *  已连接时走 Clash API(经代理真实路径)。 */
+  /**
+   * 测速策略（回应"没启动 VPN 测通、启动后却超时"的误报）：
+   * 未连接时先懒加载一个 headless 内核（不建 TUN、不请求 VPN 授权），
+   * 走 /proxies/{name}/delay 真实协议测速 —— 与连上后同一套判定；
+   * 内核拉不起来时才回退 DirectLatencyTester 的 TCP/QUIC 探测。
+   * 已连接时直接走 Clash API。
+   */
   private async testNodeDelay(node: ProxyNode): Promise<number> {
-    if (!this.isConnected) {
-      return DirectLatencyTester.testNode(node);
+    if (this.isConnected) {
+      return this.orchestrator.api.testLatency(node.name, this.settings.testLatencyUrl);
     }
-    return this.orchestrator.api.testLatency(node.name, this.settings.testLatencyUrl);
+    if (!this.testCoreTried) {
+      this.testCoreTried = true;
+      this.testCoreOk = await this.orchestrator.ensureTestCore(this.subs, this.settings);
+    }
+    if (this.testCoreOk) {
+      return this.orchestrator.api.testLatency(node.name, this.settings.testLatencyUrl);
+    }
+    return DirectLatencyTester.testNode(node);
+  }
+
+  /** 长按删除单个节点 */
+  private async doDeleteNode(): Promise<void> {
+    if (this.deleteTargetId.length === 0) {
+      return;
+    }
+    const removed = this.subs.findNode(this.deleteTargetId);
+    const wasSelected = this.settings.preferredNodeId === this.deleteTargetId;
+    const ok = await this.subs.removeNode(this.deleteTargetId);
+    this.deleteTargetId = '';
+    if (!ok) {
+      promptAction.showToast({ message: '删除失败，请重试' });
+      return;
+    }
+    if (wasSelected) {
+      this.settings.preferredNodeId = '';
+      await SettingsService.save(this.settings);
+      this.selectedName = this.subs.nodes.length > 0 ? this.subs.nodes[0].name : '';
+    }
+    this.rebuildRows();
+    promptAction.showToast({ message: removed !== null ? `已删除「${removed.name}」` : '已删除' });
   }
 
   private async testAll(): Promise<void> {
@@ -275,15 +404,35 @@ struct NodeSelectionPage {
     }
     this.batchTesting = true;
     const list = this.nodes.map((r) => r.node);
-    for (const n of list) {
-      this.testingName = n.name;
-      const delay = await this.testNodeDelay(n);
-      if (delay !== -2) {
-        LatencyController.set(n.name, delay);
-      }
+    // 并发测速池(12 路): 串行时 89 节点 × 最长 4-7s 超时 = 数分钟;
+    // 并发后总耗时 ≈ max(单节点耗时) × ceil(N/12), 结果逐条即时回写。
+    let cursor = 0;
+    const workers: Promise<void>[] = [];
+    const lanes = Math.min(12, list.length);
+    for (let w = 0; w < lanes; w++) {
+      workers.push((async (): Promise<void> => {
+        for (;;) {
+          if (!this.batchTesting) {
+            return; // 批次被取消
+          }
+          const i = cursor;
+          cursor = cursor + 1;
+          if (i >= list.length) {
+            return;
+          }
+          const delay = await this.testNodeDelay(list[i]);
+          if (delay !== -2) {
+            LatencyController.set(list[i].name, delay);
+          }
+        }
+      })());
     }
-    this.testingName = '';
+    await Promise.all(workers);
     this.batchTesting = false;
+    this.testingName = '';
+    // 测速完成 → 按延迟从低到高重排(失败/未测沉底)
+    this.sortByLatency = true;
+    this.rebuildRows();
   }
 
   private async selectNode(node: ProxyNode): Promise<void> {
@@ -387,7 +536,7 @@ struct NodeSelectionPage {
           Row({ space: 7 }) {
             Text('🔗').fontSize(14)
             Text('强制代理网站')
-              .fontSize(13).fontWeight(FontWeight.Medium).fontColor(Ui.primaryBlue)
+              .fontSize(13).fontWeight(FontWeight.Medium).fontColor(Ui.textBlue)
           }
           .layoutWeight(1)
           .justifyContent(FlexAlign.Center)
@@ -399,7 +548,7 @@ struct NodeSelectionPage {
           Row({ space: 7 }) {
             Text('⛓').fontSize(14)
             Text('强制直连网站')
-              .fontSize(13).fontWeight(FontWeight.Medium).fontColor(Ui.primaryBlue)
+              .fontSize(13).fontWeight(FontWeight.Medium).fontColor(Ui.textBlue)
           }
           .layoutWeight(1)
           .justifyContent(FlexAlign.Center)
@@ -473,6 +622,9 @@ struct NodeSelectionPage {
         }
 
         // ── 节点列表 ──
+        Text('长按节点可删除 · 测速走真实协议栈(不建隧道不弹授权)')
+          .fontSize(11).fontColor(Ui.textTertiary)
+          .margin({ top: 6, bottom: 2 })
         if (this.nodes.length === 0) {
           Column({ space: 12 }) {
             Text('🖧').fontSize(46).fontColor(Ui.textTertiary)
@@ -486,6 +638,11 @@ struct NodeSelectionPage {
               ListItem() {
                 this.NodeCard(row)
               }
+              .gesture(LongPressGesture().onAction(() => {
+                this.deleteTargetId = row.node.id;
+                this.deleteTargetName = row.node.name;
+                this.deleteNodeDialog.open();
+              }))
             }, (row: NodeRow) => row.node.id + '#' + this.latencyTick.toString() + '#' + this.testingName)
           }
           .layoutWeight(1)

@@ -250,6 +250,15 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
       // 未启动过时停止属正常
     }
 
+    // headless 测速模式(UI 预启动内核做真实协议测速): 不建 TUN、不请求 VPN
+    // 授权、不启 protect/心跳 —— 只拉起内核开 127.0.0.1 的 mixed+API 端口。
+    const headless = (params !== undefined && params !== null)
+      && ((params['headless'] as number) === 1);
+    if (headless) {
+      this.runHeadless(configPath);
+      return;
+    }
+
     // IPv6 入站(UI 侧连接前探测物理网络后传入): 1=当前环境有 IPv6, 开双栈;
     // 0/缺省=无 IPv6 环境, 自动绕过 —— 只装 IPv4 地址与默认路由, 不把设备
     // 引上没有出口的 ::/0(否则 YouTube 等 IPv6-preferred 应用直接失联)。
@@ -351,6 +360,25 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
       const msg = e instanceof Error ? e.message : String(e);
       this.reportStartError(configPath, `VPN 扩展启动异常: ${msg}`);
       AppLogger.error(TAG, `vpn onCreate failed: ${msg}`);
+      await this.cleanupResources();
+    }
+  }
+
+  /** headless 测速内核: 仅 startCore + 回写启动结果标记, 失败走同一错误通道 */
+  private async runHeadless(configPath: string): Promise<void> {
+    try {
+      AppLogger.info(TAG, 'headless test-core starting (no TUN / no VPN permission)');
+      const ok = await coreBridge.startCore(configPath);
+      if (!ok) {
+        const coreErr = await coreBridge.lastError();
+        throw new Error(coreErr.length > 0 ? coreErr : 'headless 内核启动失败');
+      }
+      this.reportStartOk(configPath);
+      AppLogger.info(TAG, 'headless test-core started');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      this.reportStartError(configPath, `测速内核启动失败: ${msg}`);
+      AppLogger.error(TAG, `headless start failed: ${msg}`);
       await this.cleanupResources();
     }
   }

@@ -20,6 +20,14 @@ export class Ui {
   static readonly textTertiary: string = '#929BB1';
   static readonly border: string = '#33FFFFFF';
 
+  // ── 2.1.4.1 色彩对比度整改: 正文文字 ≥4.5:1 专用变体 ──
+  // 品牌色 primaryBlue/error/primary 在白底卡片上只有 3.2~4.3, 作为正文不达标;
+  // 填充/描边继续用原品牌色(图形 ≥3:1 即可), 文字一律改用以下提亮版。
+  static readonly textBlue: string = '#6E9BFF';        // 卡片上 5.8:1
+  static readonly textError: string = '#F07984';       // 卡片上 5.8:1
+  static readonly textViolet: string = '#9E99FF';      // surfaceStrong 上 5.7:1
+  static readonly primaryBlueFill: string = '#2E64E6'; // 白字按钮底: 白字对比 5.2:1
+
   static readonly pagePadding: number = 20;
   static readonly cardRadius: number = 24;
   static readonly compactBreakpoint: number = 460;

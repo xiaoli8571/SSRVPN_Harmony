@@ -1,0 +1,1408 @@
+diff --git a/SSRVPN_HarmonyOS/AppScope/app.json5 b/SSRVPN_HarmonyOS/AppScope/app.json5
+index c69b3a2..60dc7e4 100644
+--- a/SSRVPN_HarmonyOS/AppScope/app.json5
++++ b/SSRVPN_HarmonyOS/AppScope/app.json5
+@@ -1,10 +1,10 @@
+-﻿{
++{
+   "app": {
+     "bundleName": "com.ssrvpn.client",
+     "vendor": "SSRVPN",
+-    "versionCode": 4037,
+-    "versionName": "4.0.37",
+-    "icon": "$media:app_icon",
++    "versionCode": 50000,
++    "versionName": "5.0.0",
++    "icon": "$media:layered_image",
+     "label": "$string:app_name"
+   }
+ }
+diff --git a/SSRVPN_HarmonyOS/AppScope/resources/base/media/app_icon.png b/SSRVPN_HarmonyOS/AppScope/resources/base/media/app_icon.png
+index 4d6372eebdb28e45604e46eeda8dd24651419bc0..43bab2cd30c3bb70661586e46c392d654e09c221 100644
+GIT binary patch
+literal 3439
+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
+
+literal 1443
+zcmb`G{WsKk6vsdJTdFg%tJav9_E4vzrOaqkWF|A724Nly!y+?N9`Y<EGuRA6NX2Md
+zPqmGQbJPjRLrI#9?bL25ZHra>V6wZ}5(X(D_N(?!*n3`|_r0Hc?=PQw&*vnU?QTFY
+zB_M<hJUv`}aj#i9>sH|!j$PP;I}?dppoE_gA(4uc!jV&0!l7_;&p2^pxNo>PEcNJv
+za5_RT$o2Mf!<+r?&EbHH6nMoTsDOa;mN(wv8RNsHpG)`^ymG-S5By8<s&Q-yp4r*9
+z(t|8L&`vhm$wAg!MByQdFQW1h)eqSS&@P++v^xmx2}OHF$WDZ4QHUN37S3Sd0#=@|
+zD*$YR!8QbJ55gWH>=l9iVXzN_eG%Xg2@Xeq76tTZ*dGh~<G>Lo9vl;Zfs+W#BydUw
+zCkZ$o1LqWQO$FC9aKlLl*7x9^0q%0}$OMlp@Kk_jHXOjofdePND+j!A{q!8~Jn+s3
+z?~~w@4?egS02}8NuulUA=L~QQfm;MzCGd)XhiftT;+zFO&JVyp2mBww?;QByS_1w!
+zrQlx%{^cMj0|Bo1FjwY@Q8?Hx0cIPF*@-ZRFpPc#bBw{5@tD(5%sClzIfl8WU~V#u
+zm5Q;_F!wa$BSpqhN>W@2De?TKWR*!ujY;Yylk_X5#~V!L*Gw~;$%<BT_6>4Q8~Mad
+z@`-kG?yb$a9cHIApZDVZ^U6Xkp<*4rU82O7%}0jjHlK{id@?-wpN*fCHXyXh(bLt*
+zPc}H-x0e4E&nQ>y%B-(EL=9}RyC%MyX=upHuFhAk&MLbsF0LP-q`XnH78@fT+pKPW
+zu72MW`|?8h<N~B$l%}NU6KvLZj~&>t^tz$iC}ZwLp4tB;Q49K!QCF3@!iB1qOI=?w
+z7In!}F~ij(18UYUjnbmC!qKhPo%24?8U1x{7o(+?^Zu0Hx81|FuS?bJ0jgBhEMzf<
+zCgUq7r2OCB(`XkKcN-TL>u5y#dD6D!)5W?`O5)V^>jb)P)GBdy%t$uUMpf$SNV31$
+zb||OojAbvMP?T@$h_ZiFLFVHDmbyMhJF|-_)HX3%m=CDI+ID$0^C>kzxprBW)hw(v
+zr!Gmda);ICoQyhV_oP5+C%?jcG8v+D@9f?Dk*!BxY}dazmrT@64UrP3hlslANK)bq
+z$67n83eh}OeW&SV@HG95P|bjfqJ7gw$e+`Hxo!4cx`jdK1bJ>YDSpGKLPZ^1cv$ek
+zIB?0S<#tX?SJCLWdMd{-ME?$hc7A$zBOdIJ)4!KcAwb=VMov)nK;9z>x~rfT1>dS+
+zZ6#`2v@`jgbqq)P22H)Tx2CpmM^o1$B+xT6`(v%5xJ(?j#>Q$+rx_R|7TzDZe{J6q
+zG1*EcU%tE?!kO%^M;3aM6JN*LAKUVb^xz8-Pxo#jR5(-KBeLJvA@-gxNHx0M-ZJLl
+z;#JwQoh~9V?`UVo#}{6ka@II>++D@%KqGpMdlQ}?9E*wFcf5(#XQnP$Dk5~%iX^>f
+z<NEXJGYh+`9LE^Z1#g~OZ)yl?O>%$y;?M0BLp{O3a(-4A?ewryHrrD%cx#Q^%KY1H
+zNre$ve+vceSLZcNY4U(RBX&)oZn*Py()h)XkE?PL$!bNb{N5FVI2Y%LKEm%yvpyTP
+z(1P?z<YzdcoCZ;A^sD<`wcO1=DLw>~7YxD~Rf<<Lt&2H?f`^~9TW?0O(WnyXeZvF-
+hHxv6WEXUT@T$j&O|7sZ6iSVC<kf$5l^{TT-@h=>(a@_y`
+
+diff --git a/SSRVPN_HarmonyOS/build-profile.json5 b/SSRVPN_HarmonyOS/build-profile.json5
+index 006e856..4b01c7a 100644
+--- a/SSRVPN_HarmonyOS/build-profile.json5
++++ b/SSRVPN_HarmonyOS/build-profile.json5
+@@ -1,9 +1,24 @@
+ {
+   "app": {
+-    "signingConfigs": [],
++    "signingConfigs": [
++      {
++        "name": "release",
++        "type": "HarmonyOS",
++        "material": {
++          "certpath": "C:\\Users\\xiaoli\\Downloads\\Agent-WorkerSpaces\\SSRVPN-HarmonyOS\\SSRVPN.cer",
++          "keyAlias": "ssrvpn",
++          "keyPassword": "0000001b7a3c9fadc3d048c8bab5669be7fc12830134724e7445bd3c945f8dd59fa47dea7acbe1adf07cb4",
++          "profile": "C:\\Users\\xiaoli\\Downloads\\Agent-WorkerSpaces\\SSRVPN-HarmonyOS\\SSRVPNRelease.p7b",
++          "signAlg": "SHA256withECDSA",
++          "storeFile": "C:\\Users\\xiaoli\\Downloads\\Agent-WorkerSpaces\\SSRVPN-HarmonyOS\\SSRVPN.p12",
++          "storePassword": "0000001b7a3c9fadc3d048c8bab5669be7fc12830134724e7445bd3c945f8dd59fa47dea7acbe1adf07cb4"
++        }
++      }
++    ],
+     "products": [
+       {
+         "name": "default",
++        "signingConfig": "release",
+         // SDK 基线：本机 SDK 为 HarmonyOS 6.1.1（API 24）；产物可向后兼容安装到 API 26 设备
+         "compatibleSdkVersion": "6.1.1(24)",
+         "targetSdkVersion": "6.1.1(24)",
+diff --git a/SSRVPN_HarmonyOS/entry/src/main/ets/commons/services/ClashConfigGenerator.ets b/SSRVPN_HarmonyOS/entry/src/main/ets/commons/services/ClashConfigGenerator.ets
+index 49137c3..770b97e 100644
+--- a/SSRVPN_HarmonyOS/entry/src/main/ets/commons/services/ClashConfigGenerator.ets
++++ b/SSRVPN_HarmonyOS/entry/src/main/ets/commons/services/ClashConfigGenerator.ets
+@@ -14,7 +14,8 @@ import { AppSettings } from '../models/AppSettings';
+ export class ClashConfigGenerator {
+   static generate(selectedNode: ProxyNode, allNodes: ProxyNode[], settings: AppSettings,
+     mixedPort: number, apiPort: number, apiSecret: string, useGeoip: boolean = true,
+-    ipv6Enabled: boolean = false, proxyHosts: Record<string, string> = {}): string {
++    ipv6Enabled: boolean = false, proxyHosts: Record<string, string> = {},
++    tunEnabled: boolean = true): string {
+     const lines: string[] = [];
+ 
+     lines.push('mixed-port: ' + mixedPort);
+@@ -57,7 +58,8 @@ export class ClashConfigGenerator {
+     lines.push('    - 119.29.29.29');
+     lines.push('');
+     lines.push('tun:');
+-    lines.push('  enable: true');
++    // headless 测速模式: tun.enable=false, 内核只开 mixed/API 端口, 不建隧道不碰 VPN 权限
++    lines.push('  enable: ' + (tunEnabled ? 'true' : 'false'));
+     lines.push('  stack: gvisor');  // fd 注入 + 沙箱无 iptables, 只有 gvisor 可用
+     // DNS 覆写(TUN 层): 所有目标端口 53 的 DNS 请求一律劫持进内核解析。
+     lines.push('  dns-hijack:');
+diff --git a/SSRVPN_HarmonyOS/entry/src/main/ets/commons/services/ConnectionOrchestrator.ets b/SSRVPN_HarmonyOS/entry/src/main/ets/commons/services/ConnectionOrchestrator.ets
+index 83bf15f..c5c0125 100644
+--- a/SSRVPN_HarmonyOS/entry/src/main/ets/commons/services/ConnectionOrchestrator.ets
++++ b/SSRVPN_HarmonyOS/entry/src/main/ets/commons/services/ConnectionOrchestrator.ets
+@@ -214,8 +214,124 @@ export class ConnectionOrchestrator {
+     return age >= 0 && age < HEARTBEAT_STALE_MS;
+   }
+ 
++  /** headless 测速内核: 未连接时预启动真实协议栈做端到端测速 */
++  testCoreActive: boolean = false;
++  private testCoreSecret: string = '';
++
++  /**
++   * 确保 headless 测速内核在跑（不建 TUN、不请求 VPN 授权）:
++   * 复用同一份生成配置(tun.enable=false) + DoH pin 结果, 内核起来后
++   * /proxies/{name}/delay 走的就是节点真实协议路径 —— 彻底解决
++   * "TCP 测通但连上 VPN 后超时"的离线测速误报。
++   */
++  async ensureTestCore(subs: SubscriptionService, settings: AppSettings): Promise<boolean> {
++    if (this.testCoreActive) {
++      return true;
++    }
++    if (this.context === null || subs.nodes.length === 0) {
++      return false;
++    }
++    try {
++      const domains: string[] = [];
++      for (const n of subs.nodes) {
++        const s = n.server;
++        if (s.length === 0 || s.includes(':') || /^\d+\.\d+\.\d+\.\d+$/.test(s)) {
++          continue;
++        }
++        domains.push(s);
++      }
++      let hosts: Record<string, string> = {};
++      try {
++        hosts = await DoHResolver.resolveMany(domains, 4000);
++      } catch (e) {
++        AppLogger.warn(TAG, `test-core DoH pre-resolve failed: ${e instanceof Error ? e.message : String(e)}`);
++      }
++      this.testCoreSecret = `ssr-test-${Date.now().toString(36)}-${Math.floor(Math.random() * 0x7FFFFFFF).toString(36)}`;
++      // geoip 缺失时不生成 GEOIP 规则(同 connect), 否则内核启动会联网下载 MMDB 卡死
++      let testGeoip = false;
++      try {
++        testGeoip = fs.statSync(`${this.context.cacheDir}/geoip.metadb`).size > 0;
++      } catch (e) {
++        testGeoip = false;
++      }
++      const yaml = ClashConfigGenerator.generate(subs.nodes[0], subs.nodes, settings,
++        MIXED_PORT, API_PORT, this.testCoreSecret, testGeoip, false, hosts, false);
++      const configPath = `${this.context.cacheDir}/mihomo_test_config.yaml`;
++      const file = fs.openSync(configPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
++      try {
++        fs.writeSync(file.fd, yaml);
++      } finally {
++        fs.closeSync(file);
++      }
++      this.clearStartError();
++      const stopWant: Want = {
++        bundleName: 'com.ssrvpn.client',
++        abilityName: 'VpnExtensionAbility'
++      };
++      try {
++        await vpnExtension.stopVpnExtensionAbility(stopWant);
++      } catch (e) {
++        // 未运行属正常
++      }
++      await new Promise<void>((resolve) => setTimeout(() => resolve(), 600));
++      const want: Want = {
++        bundleName: 'com.ssrvpn.client',
++        abilityName: 'VpnExtensionAbility',
++        parameters: {
++          configPath: configPath,
++          headless: 1
++        }
++      };
++      await Promise.race([
++        vpnExtension.startVpnExtensionAbility(want),
++        new Promise<void>((resolve, reject) => {
++          setTimeout(() => {
++            reject(new Error('测速内核拉起超时'));
++          }, 15000);
++        })
++      ]);
++      this.api.setEndpoint(API_PORT, this.testCoreSecret);
++      const deadline = Date.now() + 20000;
++      while (Date.now() < deadline) {
++        const extErr = this.readStartError();
++        if (extErr.length > 0) {
++          throw new Error(`测速内核启动失败: ${extErr}`);
++        }
++        if (this.readStartOk() && await this.api.healthProbe()) {
++          this.testCoreActive = true;
++          AppLogger.info(TAG, 'headless test core ready');
++          return true;
++        }
++        await new Promise<void>((resolve) => setTimeout(() => resolve(), 300));
++      }
++      throw new Error('测速内核就绪超时(20s)');
++    } catch (e) {
++      AppLogger.warn(TAG, `ensureTestCore failed: ${e instanceof Error ? e.message : String(e)}`);
++      this.testCoreActive = false;
++      return false;
++    }
++  }
++
++  async stopTestCore(): Promise<void> {
++    if (!this.testCoreActive) {
++      return;
++    }
++    this.testCoreActive = false;
++    try {
++      const stopWant: Want = {
++        bundleName: 'com.ssrvpn.client',
++        abilityName: 'VpnExtensionAbility'
++      };
++      await vpnExtension.stopVpnExtensionAbility(stopWant);
++    } catch (e) {
++      AppLogger.warn(TAG, `stopTestCore error: ${e instanceof Error ? e.message : String(e)}`);
++    }
++  }
++
+   async connect(node: ProxyNode, subs: SubscriptionService): Promise<boolean> {
+     const seq = ++this.connectSeq;
++    // 真实连接会重启扩展进程, headless 测速内核随之失效
++    this.testCoreActive = false;
+     this.state = ConnState.CONNECTING;
+     this.lastError = '';
+     this.lastSubs = subs;
+@@ -365,7 +481,17 @@ export class ConnectionOrchestrator {
+           bypassPackages: settings.excludedApps.join(',')
+         }
+       };
+-      await vpnExtension.startVpnExtensionAbility(want);
++      // 关键防护: startVpnExtensionAbility 的 Promise 在系统授权链路异常时
++      // (真机实证: checkVpnPermission datashare Query error → vpndialog 后无响应)
++      // 可能永不 resolve —— 加 15s 竞速超时, 保证 UI 不会无限转圈。
++      await Promise.race([
++        vpnExtension.startVpnExtensionAbility(want),
++        new Promise<void>((resolve, reject) => {
++          setTimeout(() => {
++            reject(new Error('VPN 扩展拉起超时（15s）：系统授权弹窗未完成或扩展无法启动，请重试'));
++          }, 15000);
++        })
++      ]);
+ 
+       this.api.resetTrafficBaseline();
+       this.api.setEndpoint(API_PORT, this.apiSecret);
+diff --git a/SSRVPN_HarmonyOS/entry/src/main/ets/commons/services/DirectLatencyTester.ets b/SSRVPN_HarmonyOS/entry/src/main/ets/commons/services/DirectLatencyTester.ets
+index 7c1c65a..230f710 100644
+--- a/SSRVPN_HarmonyOS/entry/src/main/ets/commons/services/DirectLatencyTester.ets
++++ b/SSRVPN_HarmonyOS/entry/src/main/ets/commons/services/DirectLatencyTester.ets
+@@ -14,15 +14,24 @@
+  * (测不出≠死了), 因此 obfs 节点仍返回 -2 未测试。
+  */
+ import { socket } from '@kit.NetworkKit';
++import { util } from '@kit.ArkTS';
+ import { ProxyNode } from '../models/ProxyNode';
+ import { AppLogger } from '../utils/AppLogger';
+ 
+ const TAG = 'DirectLatencyTester';
+ const TCP_TIMEOUT_MS = 4000;
+ const QUIC_TIMEOUT_MS = 2500;
++const TLS_TIMEOUT_MS = 3000;
+ 
+ export class DirectLatencyTester {
+-  /** 直连测试单个节点: TCP 毫秒数 / hy2 QUIC 探测毫秒数; 失败 -1; 无法离线探测 -2 */
++  /** 直连测试单个节点: 毫秒数; 失败 -1; 无法离线探测 -2。
++   *  分级策略(回应"IP通就算正常?"的误报):
++   *   - hysteria2 → QUIC Initial 探测(收版本协商包)
++   *   - tls: true → TCP 连上后再发真实 TLS ClientHello(带 SNI), 必须收到
++   *     ServerHello/Alert 等任何 TLS 记录才算存活 —— 只测 TCP 会把
++   *     "端口开着但 TLS 层已死"的假活节点误判为正常
++   *   - 其余(ss/ssr/明文) → TCP 握手(无更高层可探, 结果仅代表服务器可达)
++   */
+   static async testNode(node: ProxyNode): Promise<number> {
+     if (node.server.length === 0 || node.port <= 0 || node.port >= 65536) {
+       return -1;
+@@ -33,9 +42,117 @@ export class DirectLatencyTester {
+       }
+       return DirectLatencyTester.probeQuic(node);
+     }
++    if (node.tls && node.realityPublicKey.length === 0) {
++      // reality 节点对非 uTLS 指纹的裸 ClientHello 可能静默不回包, 误杀率高, 走 TCP
++      return DirectLatencyTester.probeTls(node);
++    }
+     return DirectLatencyTester.probeTcp(node);
+   }
+ 
++  /** 组装带 SNI 的 TLS1.2/1.3 ClientHello（任何合规 TLS 栈都必须回包） */
++  private static buildClientHello(sni: string): ArrayBuffer {
++    const nameBytes = new util.TextEncoder().encodeInto(sni);
++    const suites: number[] = [0x1301, 0x1302, 0x1303, 0xC02C, 0xC02B, 0xC030, 0xC02F,
++      0xC024, 0xC023, 0xC028, 0xC027, 0xC00A, 0xC014, 0x009E, 0x009C, 0x003D, 0x003C, 0x002F];
++    const ext: number[] = [];
++    const pushExt = (type: number, body: number[]): void => {
++      ext.push((type >> 8) & 0xFF, type & 0xFF, (body.length >> 8) & 0xFF, body.length & 0xFF);
++      for (const b of body) {
++        ext.push(b);
++      }
++    };
++    const sniBody: number[] = [0x00, (nameBytes.length >> 8) & 0xFF, nameBytes.length & 0xFF, 0x00,
++      (nameBytes.length >> 8) & 0xFF, nameBytes.length & 0xFF];
++    for (let i = 0; i < nameBytes.length; i++) {
++      sniBody.push(nameBytes[i]);
++    }
++    const sniListLen = sniBody.length;
++    pushExt(0x0000, [(sniListLen >> 8) & 0xFF, sniListLen & 0xFF].concat(sniBody));
++    pushExt(0x002B, [0x02, 0x03, 0x04]);                                  // supported_versions TLS1.3
++    pushExt(0x000D, [0x00, 0x08, 0x04, 0x03, 0x08, 0x04, 0x04, 0x01, 0x05, 0x03]); // sig algs
++    pushExt(0x000A, [0x00, 0x06, 0x00, 0x1D, 0x00, 0x17, 0x00, 0x18]);    // groups x25519/P256/P384
++    pushExt(0x000B, [0x01, 0x00]);                                          // ec_point_formats
++    pushExt(0x0010, [0x00, 0x0E, 0x00, 0x02, 0x68, 0x32, 0x00, 0x08, 0x68, 0x74, 0x74, 0x70,
++      0x2F, 0x31, 0x2E, 0x31]);                                             // ALPN h2/http1.1
++    const body: number[] = [];
++    body.push(0x03, 0x03);
++    for (let i = 0; i < 32; i++) {
++      body.push((i * 7 + 3) & 0xFF);
++    }
++    body.push(0x00);
++    const suitesLen = suites.length * 2;
++    body.push((suitesLen >> 8) & 0xFF, suitesLen & 0xFF);
++    for (const s of suites) {
++      body.push((s >> 8) & 0xFF, s & 0xFF);
++    }
++    body.push(0x01, 0x00);
++    const extLen = ext.length;
++    body.push((extLen >> 8) & 0xFF, extLen & 0xFF);
++    for (const e of ext) {
++      body.push(e);
++    }
++    const hsLen = body.length + 4;
++    const record: number[] = [];
++    record.push(0x16, 0x03, 0x01);
++    const recLen = hsLen + 4 + 3;
++    record.push((recLen >> 8) & 0xFF, recLen & 0xFF);
++    record.push(0x01, (hsLen >> 16) & 0xFF, (hsLen >> 8) & 0xFF, hsLen & 0xFF);
++    for (const b of body) {
++      record.push(b);
++    }
++    return new Uint8Array(record).buffer as ArrayBuffer;
++  }
++
++  /** TLS 探测: TCP 连接 + ClientHello, 收到任何回包(ServerHello/Alert)才算存活 */
++  private static probeTls(node: ProxyNode): Promise<number> {
++    const tcp = socket.constructTCPSocketInstance();
++    const sni = node.servername.length > 0 ? node.servername : node.server;
++    const ch = DirectLatencyTester.buildClientHello(sni);
++    const start = Date.now();
++    return new Promise<number>((resolve) => {
++      let settled = false;
++      let timerId = -1;
++      const finish = (value: number): void => {
++        if (settled) {
++          return;
++        }
++        settled = true;
++        if (timerId >= 0) {
++          clearInterval(timerId);
++        }
++        try {
++          tcp.off('message');
++        } catch (e) {
++          // ignore
++        }
++        try {
++          tcp.close();
++        } catch (e) {
++          // ignore
++        }
++        resolve(value);
++      };
++      tcp.on('message', () => {
++        finish(Date.now() - start);
++      });
++      tcp.connect({
++        address: { address: node.server, port: node.port, family: 1 },
++        timeout: TCP_TIMEOUT_MS
++      } as socket.TCPConnectOptions).then(() => {
++        tcp.send({ data: ch } as socket.TCPSendOptions).catch(() => {
++          finish(-1);
++        });
++      }).catch(() => {
++        finish(-1);
++      });
++      timerId = setInterval(() => {
++        if (Date.now() - start >= TCP_TIMEOUT_MS + TLS_TIMEOUT_MS) {
++          finish(-1);
++        }
++      }, 150);
++    });
++  }
++
+   /** TCP 握手探测（原实现） */
+   private static async probeTcp(node: ProxyNode): Promise<number> {
+     const start = Date.now();
+diff --git a/SSRVPN_HarmonyOS/entry/src/main/ets/commons/services/SubscriptionService.ets b/SSRVPN_HarmonyOS/entry/src/main/ets/commons/services/SubscriptionService.ets
+index 2768bbc..0b17e7b 100644
+--- a/SSRVPN_HarmonyOS/entry/src/main/ets/commons/services/SubscriptionService.ets
++++ b/SSRVPN_HarmonyOS/entry/src/main/ets/commons/services/SubscriptionService.ets
+@@ -17,11 +17,14 @@ const TAG = 'SubscriptionService';
+ const PREF_NAME = 'ssrvpn_subscriptions';
+ const KEY_SUBS = 'subscriptions_json';
+ const KEY_NODES = 'nodes_json';
++const KEY_HIDDEN = 'hidden_nodes_json';
+ 
+ export class SubscriptionService {
+   private store: preferences.Preferences | null = null;
+   subscriptions: Subscription[] = [];
+   nodes: ProxyNode[] = [];
++  /** 用户手动删除的节点指纹清单: 订阅刷新时过滤, 防止已删节点"复活" */
++  private hiddenNodes: string[] = [];
+   /** 撤销记录（对应 subscription_undo_record.dart）：最近一次删除的订阅与节点 */
+   private undoSnapshot: SubscriptionUndoSnapshot | null = null;
+ 
+@@ -29,6 +32,7 @@ export class SubscriptionService {
+     this.store = await preferences.getPreferences(context, PREF_NAME);
+     this.subscriptions = [];
+     this.nodes = [];
++    this.hiddenNodes = [];
+ 
+     try {
+       const subsRaw = await this.store.get(KEY_SUBS, '[]') as string;
+@@ -44,9 +48,47 @@ export class SubscriptionService {
+       AppLogger.warn(TAG, 'invalid nodes preferences ignored');
+     }
+ 
++    try {
++      const hiddenRaw = await this.store.get(KEY_HIDDEN, '[]') as string;
++      const arr = JSON.parse(hiddenRaw) as string[];
++      if (Array.isArray(arr)) {
++        this.hiddenNodes = arr.filter((x): boolean => typeof x === 'string');
++      }
++    } catch (e) {
++      AppLogger.warn(TAG, 'invalid hidden nodes preferences ignored');
++    }
++
+     AppLogger.info(TAG, `loaded ${this.subscriptions.length} subscriptions, ${this.nodes.length} nodes`);
+   }
+ 
++  /** 节点稳定指纹（跨刷新不变, 用于删除记忆） */
++  static nodeKey(n: ProxyNode): string {
++    return `${n.subscriptionId}|${n.server}|${n.port}|${n.name}`;
++  }
++
++  /**
++   * 删除单个节点（订阅页长按）: 从列表移除并记入隐藏清单,
++   * 后续订阅刷新自动过滤; 手动直连节点同样支持（重新导入链接可再次添加）。
++   */
++  async removeNode(nodeId: string): Promise<boolean> {
++    const n = this.findNode(nodeId);
++    if (n === null) {
++      return false;
++    }
++    const key = SubscriptionService.nodeKey(n);
++    if (!this.hiddenNodes.includes(key)) {
++      this.hiddenNodes.push(key);
++    }
++    this.nodes = this.nodes.filter((x) => x.id !== nodeId);
++    const sub = this.subscriptions.find((s) => s.id === n.subscriptionId);
++    if (sub !== undefined) {
++      sub.nodeCount = this.nodesOf(sub.id).length;
++    }
++    await this.persist();
++    AppLogger.info(TAG, `node removed: ${n.name} (hidden total ${this.hiddenNodes.length})`);
++    return true;
++  }
++
+   private static validString(value: Object, maxLength: number, allowEmpty: boolean = true): boolean {
+     return typeof value === 'string' && value.length <= maxLength && (allowEmpty || value.length > 0);
+   }
+@@ -249,6 +291,7 @@ export class SubscriptionService {
+     }
+     await this.store.put(KEY_SUBS, JSON.stringify(subsJson));
+     await this.store.put(KEY_NODES, JSON.stringify(SubscriptionService.nodesToJson(this.nodes)));
++    await this.store.put(KEY_HIDDEN, JSON.stringify(this.hiddenNodes));
+     await this.store.flush();
+   }
+ 
+@@ -326,6 +369,10 @@ export class SubscriptionService {
+         return SubscriptionRefreshResult.fail(SubscriptionRefreshStatus.PARSE_ERROR,
+           '内容未解析出节点（支持 ss/ssr/vless/vmess/trojan 与 Clash YAML）');
+       }
++      // 用户手动删除过的节点: 刷新后不再复活
++      if (this.hiddenNodes.length > 0) {
++        parsed = parsed.filter((n) => !this.hiddenNodes.includes(SubscriptionService.nodeKey(n)));
++      }
+       this.nodes = this.nodes.filter((n) => n.subscriptionId !== id).concat(parsed);
+       sub.nodeCount = parsed.length;
+       sub.lastFetchedAt = Date.now();
+diff --git a/SSRVPN_HarmonyOS/entry/src/main/ets/pages/HomePage.ets b/SSRVPN_HarmonyOS/entry/src/main/ets/pages/HomePage.ets
+index 468f880..d6d7ce6 100644
+--- a/SSRVPN_HarmonyOS/entry/src/main/ets/pages/HomePage.ets
++++ b/SSRVPN_HarmonyOS/entry/src/main/ets/pages/HomePage.ets
+@@ -19,6 +19,7 @@ import { DiagnosticsSheet } from '../widgets/DiagnosticsSheet';
+ import { PowerButton } from '../components/PowerButton';
+ import { AppLogger } from '../commons/utils/AppLogger';
+ import { AppInfo } from '../commons/utils/AppInfo';
++import { display } from '@kit.ArkUI';
+ 
+ const TAG = 'HomePage';
+ 
+@@ -36,7 +37,7 @@ struct AboutDialog {
+       // 检查更新暂不启用（后续需要时再接入自有更新源）
+       Button('关闭')
+         .width('100%')
+-        .backgroundColor(Ui.primaryBlue)
++        .backgroundColor(Ui.primaryBlueFill)
+         .fontColor(Color.White)
+         .onClick(() => {
+           if (this.controller !== undefined) {
+@@ -72,7 +73,7 @@ struct TutorialDialog {
+         Row({ space: 10 }) {
+           Text(`${idx + 1}`)
+             .fontSize(13).fontWeight(FontWeight.Bold)
+-            .fontColor(Ui.primaryBlue)
++            .fontColor(Ui.textBlue)
+             .width(22).height(22)
+             .borderRadius(11)
+             .backgroundColor('#293675FF')
+@@ -84,7 +85,7 @@ struct TutorialDialog {
+       }, (step: string) => step)
+       Button('知道了')
+         .width('100%')
+-        .backgroundColor(Ui.primaryBlue)
++        .backgroundColor(Ui.primaryBlueFill)
+         .fontColor(Color.White)
+         .onClick(() => {
+           if (this.controller !== undefined) {
+@@ -119,6 +120,8 @@ struct HomePage {
+   @State upTotal: number = 0;
+   @State downTotal: number = 0;
+   @State buttonPressed: boolean = false;
++  /** 电源按钮直径: 按屏宽自适应(手机≈40% 宽, 平板封顶 210), 修复手机上比例失衡 */
++  @State powerSize: number = 210;
+   /** 桌面长按快捷方式/服务卡片启动请求: EntryAbility 递增 seq + 写 mode, 这里消费 */
+   @StorageLink('vpn_request_seq') @Watch('onVpnRequest') vpnRequestSeq: number = 0;
+   private pageReady: boolean = false;
+@@ -145,6 +148,14 @@ struct HomePage {
+     await SettingsService.init(ctx);
+     await this.subs.init(ctx);
+     this.settings = await SettingsService.load();
++    // 电源按钮随屏宽自适应: 手机(≈433vp)取 40% 宽 ≈ 173, 平板封顶 210
++    try {
++      const disp = display.getDefaultDisplaySync();
++      const widthVp = disp.width / disp.densityPixels;
++      this.powerSize = Math.round(Math.min(210, Math.max(150, widthVp * 0.40)));
++    } catch (e) {
++      this.powerSize = 180;
++    }
+     if (!this.listenerBound) {
+       this.listenerBound = true;
+       this.orchestrator.listeners.push(() => {
+@@ -342,7 +353,7 @@ struct HomePage {
+                 .onClick(() => this.aboutDialog.open())
+               Blank()
+               Text('SSRVPN')
+-                .fontSize(29)
++                .fontSize(26)
+                 .fontWeight(FontWeight.Normal)
+                 .fontColor(Ui.textPrimary)
+                 .letterSpacing(0.4)
+@@ -353,7 +364,7 @@ struct HomePage {
+                 .onClick(() => this.tutorialDialog.open())
+             }
+             .width('100%')
+-            .height(54)
++            .height(48)
+ 
+             Blank().height(10)
+ 
+@@ -370,20 +381,20 @@ struct HomePage {
+             .borderWidth(1)
+             .borderColor(this.statusColor() === Ui.textSecondary ? '#2EA7AFC2' : '#2EFFFFFF')
+ 
+-            Blank().height(42)
++            Blank().height(28)
+ 
+             // ── 电源按钮（PowerButton 组件: 外环描边+内圆+SVG 电源图标） ──
+             PowerButton({
+               isConnected: this.isConnected,
+               isConnecting: this.isConnecting,
+               hasError: this.errorMessage.length > 0,
+-              buttonSize: 210,
++              buttonSize: this.powerSize,
+               onToggle: () => {
+                 this.toggleConnection();
+               }
+             })
+ 
+-            Blank().height(58)
++            Blank().height(34)
+ 
+             // ── 当前节点卡 ──
+             this.CurrentNodeCard()
+@@ -395,7 +406,7 @@ struct HomePage {
+             Row({ space: 10 }) {
+               Column({ space: 4 }) {
+                 Row({ space: 5 }) {
+-                  Text('↑').fontSize(13).fontColor(Ui.primaryBlue)
++                  Text('↑').fontSize(13).fontColor(Ui.textBlue)
+                   Text(this.formatSpeedValue(this.upSpeed))
+                     .fontSize(15).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
+                     .maxLines(1)
+@@ -458,8 +469,8 @@ struct HomePage {
+               Blank().height(14)
+               if (this.errorMessage.length > 0) {
+                 Row({ space: 6 }) {
+-                  Text('⚠').fontSize(16).fontColor(Ui.error)
+-                  Text(this.errorMessage).fontSize(13).fontColor(Ui.error).layoutWeight(1)
++                  Text('⚠').fontSize(16).fontColor(Ui.textError)
++                  Text(this.errorMessage).fontSize(13).fontColor(Ui.textError).layoutWeight(1)
+                 }
+                 .width('100%')
+                 .onClick(() => {
+@@ -488,7 +499,7 @@ struct HomePage {
+             }
+           }
+           .constraintSize({ maxWidth: Ui.pageMaxWidth })
+-          .padding({ left: 18, right: 18, top: 14, bottom: 130 })
++          .padding({ left: 18, right: 18, top: 14, bottom: 104 })
+         }
+         .width('100%').height('100%')
+         .scrollBar(BarState.Off)
+@@ -616,9 +627,9 @@ struct HomePage {
+         })
+       }
+       .width('100%')
+-      .padding(6)
+-      .constraintSize({ minHeight: 72 })
+-      .borderRadius(28)
++      .padding(5)
++      .constraintSize({ minHeight: 56 })
++      .borderRadius(24)
+       .backgroundColor('#F024263A')
+       .borderWidth(1)
+       .borderColor(Ui.border)
+@@ -626,26 +637,26 @@ struct HomePage {
+       .shadow({ radius: 20, color: '#242F5BFF', offsetY: 5 })
+ 
+       Text(`SSRVPN for HarmonyOS v${AppInfo.version()}`)
+-        .fontSize(11).fontColor(Ui.textTertiary)
++        .fontSize(10).fontColor(Ui.textTertiary)
+     }
+     .width('92%')
+     .constraintSize({ maxWidth: Ui.bottomNavMaxWidth })
+-    .margin({ bottom: 10 })
++    .margin({ bottom: 6 })
+   }
+ 
+   @Builder
+   NavItem(selected: boolean, icon: string, label: string, onTap: () => void) {
+     Column({ space: 2 }) {
+-      Text(icon).fontSize(20).fontColor(selected ? Ui.textPrimary : Ui.textSecondary)
++      Text(icon).fontSize(17).fontColor(selected ? Ui.textPrimary : Ui.textSecondary)
+       Text(label)
+-        .fontSize(12)
++        .fontSize(11)
+         .fontWeight(selected ? FontWeight.Bold : FontWeight.Medium)
+         .fontColor(selected ? Ui.textPrimary : Ui.textSecondary)
+     }
+     .layoutWeight(1)
+     .constraintSize({ minWidth: 0 })
+-    .padding({ top: 8, bottom: 8 })
+-    .borderRadius(22)
++    .padding({ top: 6, bottom: 6 })
++    .borderRadius(18)
+     .backgroundColor(selected ? '#29' + Ui.primary.substring(1) : Color.Transparent)
+     .onClick(() => onTap())
+   }
+diff --git a/SSRVPN_HarmonyOS/entry/src/main/ets/pages/NodeEditPage.ets b/SSRVPN_HarmonyOS/entry/src/main/ets/pages/NodeEditPage.ets
+index ffd4270..0cd7458 100644
+--- a/SSRVPN_HarmonyOS/entry/src/main/ets/pages/NodeEditPage.ets
++++ b/SSRVPN_HarmonyOS/entry/src/main/ets/pages/NodeEditPage.ets
+@@ -94,7 +94,7 @@ struct NodeEditPage {
+             .fontSize(17).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
+           Blank()
+           Text('保存')
+-            .fontSize(15).fontColor(Ui.primaryBlue)
++            .fontSize(15).fontColor(Ui.textBlue)
+             .onClick(() => this.save())
+         }
+         .width('100%')
+@@ -115,7 +115,7 @@ struct NodeEditPage {
+                   .width('100%')
+                   .height(44)
+                   .backgroundColor(Ui.surfaceStrong)
+-                  .fontColor(Ui.primary)
++                  .fontColor(Ui.textViolet)
+                   .borderRadius(12)
+                   .onClick(() => this.importFromUri())
+               }
+diff --git a/SSRVPN_HarmonyOS/entry/src/main/ets/pages/NodeSelectionPage.ets b/SSRVPN_HarmonyOS/entry/src/main/ets/pages/NodeSelectionPage.ets
+index c9c4166..490f137 100644
+--- a/SSRVPN_HarmonyOS/entry/src/main/ets/pages/NodeSelectionPage.ets
++++ b/SSRVPN_HarmonyOS/entry/src/main/ets/pages/NodeSelectionPage.ets
+@@ -30,6 +30,44 @@ interface SubChip {
+ 
+ /** 站点列表编辑对话框（强制代理/强制直连共用）。
+  *  输入框用深色主题: 比弹窗底更深的蓝黑 + 浅色文字 + 紫色光标, 可读且不突兀。 */
++@CustomDialog
++struct NodeDeleteDialog {
++  controller?: CustomDialogController;
++  getNodeName: () => string = (): string => '';
++  onConfirm: () => void = () => {};
++
++  build() {
++    Column({ space: 14 }) {
++      Text('删除节点').fontSize(17).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
++      Text(`确定删除「${this.getNodeName()}」吗？该节点在订阅刷新后不会再出现。`)
++        .fontSize(13).fontColor(Ui.textSecondary)
++      Row({ space: 12 }) {
++        Button('取消')
++          .layoutWeight(1).backgroundColor(Ui.surface).fontColor(Ui.textSecondary)
++          .onClick(() => {
++            if (this.controller !== undefined) {
++              this.controller.close();
++            }
++          })
++        Button('删除')
++          .layoutWeight(1).backgroundColor(Ui.error).fontColor(Color.White)
++          .onClick(() => {
++            if (this.controller !== undefined) {
++              this.controller.close();
++            }
++            this.onConfirm();
++          })
++      }
++      .width('100%')
++    }
++    .padding(22)
++    .borderRadius(20)
++    .backgroundColor('#F0242641')
++    .borderWidth(1)
++    .borderColor(Ui.border)
++  }
++}
++
+ @CustomDialog
+ struct SiteListDialog {
+   controller?: CustomDialogController;
+@@ -72,7 +110,7 @@ struct SiteListDialog {
+           })
+         Button('保存')
+           .layoutWeight(1)
+-          .backgroundColor(Ui.primaryBlue)
++          .backgroundColor(Ui.primaryBlueFill)
+           .fontColor(Color.White)
+           .onClick(() => {
+             const sites = this.sitesText.split(/\r?\n/)
+@@ -104,6 +142,23 @@ struct NodeSelectionPage {
+   @State selectedName: string = '';
+   @State testingName: string = '';
+   @State batchTesting: boolean = false;
++  /** 批量测速完成后按延迟升序重排列表 */
++  @State sortByLatency: boolean = false;
++  /** 长按删除节点目标 */
++  @State deleteTargetName: string = '';
++  private deleteTargetId: string = '';
++  private deleteNodeDialog: CustomDialogController = new CustomDialogController({
++    builder: NodeDeleteDialog({
++      getNodeName: (): string => this.deleteTargetName,
++      onConfirm: () => {
++        this.doDeleteNode();
++      }
++    }),
++    autoCancel: true
++  });
++  /** headless 测速内核: 未连接时预启动真实协议栈, 每页会话只尝试一次 */
++  private testCoreTried: boolean = false;
++  private testCoreOk: boolean = false;
+   @State refreshing: boolean = false;
+   @State isConnected: boolean = false;
+   @State latencyTick: number = 0;
+@@ -163,6 +218,15 @@ struct NodeSelectionPage {
+     this.bootstrap();
+   }
+ 
++  /** 离开节点页即回收测速内核（它是临时进程，不该在后台常驻） */
++  onPageHide(): void {
++    if (this.testCoreOk || this.testCoreTried) {
++      this.testCoreOk = false;
++      this.testCoreTried = false;
++      this.orchestrator.stopTestCore();
++    }
++  }
++
+   private async bootstrap(): Promise<void> {
+     const ctx = getContext(this) as Context;
+     this.orchestrator.init(ctx);
+@@ -173,6 +237,11 @@ struct NodeSelectionPage {
+     this.settings = await SettingsService.load();
+     this.proxyMode = this.settings.proxyMode === 'global' ? 'global' : 'rule';
+     this.isConnected = this.orchestrator.state === ConnState.CONNECTED;
++    if (this.isConnected) {
++      // 真实 VPN 已接管扩展进程, headless 测速内核标记复位
++      this.testCoreTried = false;
++      this.testCoreOk = false;
++    }
+     this.selectedName = this.settings.preferredNodeId.length > 0 && this.subs.findNode(this.settings.preferredNodeId) !== null
+       ? this.subs.findNode(this.settings.preferredNodeId)!.name
+       : (this.subs.nodes.length > 0 ? this.subs.nodes[0].name : '');
+@@ -220,9 +289,36 @@ struct NodeSelectionPage {
+       };
+       rows.push(row);
+     }
++    if (this.sortByLatency) {
++      // 批量测速完成后: 已测成功升序 → 未测 → 失败沉底
++      rows.sort((a: NodeRow, b: NodeRow): number => {
++        const la = LatencyController.latencyFor(a.node.name);
++        const lb = LatencyController.latencyFor(b.node.name);
++        const ra = this.latencyRank(la);
++        const rb = this.latencyRank(lb);
++        if (ra !== rb) {
++          return ra - rb;
++        }
++        if (ra === 0 && la !== null && lb !== null) {
++          return la - lb;
++        }
++        return 0;
++      });
++    }
+     this.nodes = rows;
+   }
+ 
++  /** 排序权重: 0=有延迟值 1=未测/不支持 2=失败(-1) */
++  private latencyRank(latency: number | null): number {
++    if (latency === null || latency === -2) {
++      return 1;
++    }
++    if (latency < 0) {
++      return 2;
++    }
++    return 0;
++  }
++
+   /** 刷新: 全部订阅重新拉取并重建节点列表(对齐原版顶栏刷新图标职责) */
+   private async refreshNodes(): Promise<void> {
+     if (this.refreshing) {
+@@ -259,14 +355,47 @@ struct NodeSelectionPage {
+     this.testingName = '';
+   }
+ 
+-  /** 未连接时走直连测速(内核未启动 API 不存在): TCP 握手 / hy2 QUIC Initial 探测,
+-   *  tester 返回 -2 表示该节点协议无法离线探测(如带 obfs 的 hy2), 保持未测试态。
+-   *  已连接时走 Clash API(经代理真实路径)。 */
++  /**
++   * 测速策略（回应"没启动 VPN 测通、启动后却超时"的误报）：
++   * 未连接时先懒加载一个 headless 内核（不建 TUN、不请求 VPN 授权），
++   * 走 /proxies/{name}/delay 真实协议测速 —— 与连上后同一套判定；
++   * 内核拉不起来时才回退 DirectLatencyTester 的 TCP/QUIC 探测。
++   * 已连接时直接走 Clash API。
++   */
+   private async testNodeDelay(node: ProxyNode): Promise<number> {
+-    if (!this.isConnected) {
+-      return DirectLatencyTester.testNode(node);
++    if (this.isConnected) {
++      return this.orchestrator.api.testLatency(node.name, this.settings.testLatencyUrl);
++    }
++    if (!this.testCoreTried) {
++      this.testCoreTried = true;
++      this.testCoreOk = await this.orchestrator.ensureTestCore(this.subs, this.settings);
++    }
++    if (this.testCoreOk) {
++      return this.orchestrator.api.testLatency(node.name, this.settings.testLatencyUrl);
++    }
++    return DirectLatencyTester.testNode(node);
++  }
++
++  /** 长按删除单个节点 */
++  private async doDeleteNode(): Promise<void> {
++    if (this.deleteTargetId.length === 0) {
++      return;
++    }
++    const removed = this.subs.findNode(this.deleteTargetId);
++    const wasSelected = this.settings.preferredNodeId === this.deleteTargetId;
++    const ok = await this.subs.removeNode(this.deleteTargetId);
++    this.deleteTargetId = '';
++    if (!ok) {
++      promptAction.showToast({ message: '删除失败，请重试' });
++      return;
++    }
++    if (wasSelected) {
++      this.settings.preferredNodeId = '';
++      await SettingsService.save(this.settings);
++      this.selectedName = this.subs.nodes.length > 0 ? this.subs.nodes[0].name : '';
+     }
+-    return this.orchestrator.api.testLatency(node.name, this.settings.testLatencyUrl);
++    this.rebuildRows();
++    promptAction.showToast({ message: removed !== null ? `已删除「${removed.name}」` : '已删除' });
+   }
+ 
+   private async testAll(): Promise<void> {
+@@ -275,15 +404,35 @@ struct NodeSelectionPage {
+     }
+     this.batchTesting = true;
+     const list = this.nodes.map((r) => r.node);
+-    for (const n of list) {
+-      this.testingName = n.name;
+-      const delay = await this.testNodeDelay(n);
+-      if (delay !== -2) {
+-        LatencyController.set(n.name, delay);
+-      }
++    // 并发测速池(12 路): 串行时 89 节点 × 最长 4-7s 超时 = 数分钟;
++    // 并发后总耗时 ≈ max(单节点耗时) × ceil(N/12), 结果逐条即时回写。
++    let cursor = 0;
++    const workers: Promise<void>[] = [];
++    const lanes = Math.min(12, list.length);
++    for (let w = 0; w < lanes; w++) {
++      workers.push((async (): Promise<void> => {
++        for (;;) {
++          if (!this.batchTesting) {
++            return; // 批次被取消
++          }
++          const i = cursor;
++          cursor = cursor + 1;
++          if (i >= list.length) {
++            return;
++          }
++          const delay = await this.testNodeDelay(list[i]);
++          if (delay !== -2) {
++            LatencyController.set(list[i].name, delay);
++          }
++        }
++      })());
+     }
+-    this.testingName = '';
++    await Promise.all(workers);
+     this.batchTesting = false;
++    this.testingName = '';
++    // 测速完成 → 按延迟从低到高重排(失败/未测沉底)
++    this.sortByLatency = true;
++    this.rebuildRows();
+   }
+ 
+   private async selectNode(node: ProxyNode): Promise<void> {
+@@ -387,7 +536,7 @@ struct NodeSelectionPage {
+           Row({ space: 7 }) {
+             Text('🔗').fontSize(14)
+             Text('强制代理网站')
+-              .fontSize(13).fontWeight(FontWeight.Medium).fontColor(Ui.primaryBlue)
++              .fontSize(13).fontWeight(FontWeight.Medium).fontColor(Ui.textBlue)
+           }
+           .layoutWeight(1)
+           .justifyContent(FlexAlign.Center)
+@@ -399,7 +548,7 @@ struct NodeSelectionPage {
+           Row({ space: 7 }) {
+             Text('⛓').fontSize(14)
+             Text('强制直连网站')
+-              .fontSize(13).fontWeight(FontWeight.Medium).fontColor(Ui.primaryBlue)
++              .fontSize(13).fontWeight(FontWeight.Medium).fontColor(Ui.textBlue)
+           }
+           .layoutWeight(1)
+           .justifyContent(FlexAlign.Center)
+@@ -473,6 +622,9 @@ struct NodeSelectionPage {
+         }
+ 
+         // ── 节点列表 ──
++        Text('长按节点可删除 · 测速走真实协议栈(不建隧道不弹授权)')
++          .fontSize(11).fontColor(Ui.textTertiary)
++          .margin({ top: 6, bottom: 2 })
+         if (this.nodes.length === 0) {
+           Column({ space: 12 }) {
+             Text('🖧').fontSize(46).fontColor(Ui.textTertiary)
+@@ -486,6 +638,11 @@ struct NodeSelectionPage {
+               ListItem() {
+                 this.NodeCard(row)
+               }
++              .gesture(LongPressGesture().onAction(() => {
++                this.deleteTargetId = row.node.id;
++                this.deleteTargetName = row.node.name;
++                this.deleteNodeDialog.open();
++              }))
+             }, (row: NodeRow) => row.node.id + '#' + this.latencyTick.toString() + '#' + this.testingName)
+           }
+           .layoutWeight(1)
+diff --git a/SSRVPN_HarmonyOS/entry/src/main/ets/pages/SubscriptionPage.ets b/SSRVPN_HarmonyOS/entry/src/main/ets/pages/SubscriptionPage.ets
+index 5a6dc17..2e19a0b 100644
+--- a/SSRVPN_HarmonyOS/entry/src/main/ets/pages/SubscriptionPage.ets
++++ b/SSRVPN_HarmonyOS/entry/src/main/ets/pages/SubscriptionPage.ets
+@@ -120,7 +120,7 @@ struct EditSubscriptionDialog {
+           })
+         Button('保存')
+           .layoutWeight(1)
+-          .backgroundColor(Ui.primaryBlue)
++          .backgroundColor(Ui.primaryBlueFill)
+           .fontColor(Color.White)
+           .onClick(() => {
+             if (this.controller !== undefined) {
+@@ -211,7 +211,7 @@ struct DiagnosticsLogDialog {
+             Text('🔄').fontSize(13)
+           }
+           Text('重新检查')
+-            .fontSize(13).fontColor(Ui.primaryBlue)
++            .fontSize(13).fontColor(Ui.textBlue)
+         }
+         .onClick(() => {
+           this.recheck();
+@@ -791,7 +791,7 @@ struct SubscriptionPage {
+                   .fontSize(17)
+                   .fontWeight(FontWeight.Bold)
+                   .fontColor(Color.White)
+-                  .backgroundColor(this.isAdding ? '#6B3675FF' : Ui.primaryBlue)
++                  .backgroundColor(this.isAdding ? '#6B2E64E6' : Ui.primaryBlue)
+                   .borderRadius(16)
+                   .enabled(!(this.isAdding || this.isRefreshing))
+                   .onClick(() => this.addSubscription())
+@@ -812,14 +812,14 @@ struct SubscriptionPage {
+                   .fontSize(21).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
+                 Text(`${this.subs.length}`)
+                   .fontSize(13).fontWeight(FontWeight.Bold)
+-                  .fontColor(Ui.primaryBlue)
++                  .fontColor(Ui.textBlue)
+                   .padding({ left: 9, right: 9, top: 3, bottom: 3 })
+                   .borderRadius(10)
+                   .backgroundColor('#29' + Ui.primaryBlue.substring(1))
+                   .margin({ left: 9 })
+                 Blank()
+                 Text(this.isRefreshing ? '取消刷新' : '全部刷新')
+-                  .fontSize(14).fontColor(Ui.primaryBlue)
++                  .fontSize(14).fontColor(Ui.textBlue)
+                   .onClick(() => {
+                     if (this.isRefreshing) {
+                       this.isRefreshing = false;
+@@ -879,7 +879,7 @@ struct SubscriptionPage {
+                   Column() {
+                     Row({ space: 14 }) {
+                       Column() {
+-                        Text('📡').fontSize(20).fontColor(Ui.primaryBlue)
++                        Text('📡').fontSize(20).fontColor(Ui.textBlue)
+                       }
+                       .width(48).height(48)
+                       .borderRadius(14)
+@@ -905,7 +905,7 @@ struct SubscriptionPage {
+                         .padding(6)
+                         .onClick(() => this.openEdit(sub))
+                       Text('🗑')
+-                        .fontSize(18).fontColor(Ui.error)
++                        .fontSize(18).fontColor(Ui.textError)
+                         .padding(6)
+                         .onClick(() => {
+                           this.deleteTargetId = sub.id;
+@@ -950,7 +950,7 @@ struct SubscriptionPage {
+             .width('100%')
+             .alignItems(HorizontalAlign.Start)
+           }
+-          .padding({ left: 18, right: 18, top: 0, bottom: 130 })
++          .padding({ left: 18, right: 18, top: 0, bottom: 104 })
+         }
+         .width('100%').height('100%')
+         .scrollBar(BarState.Off)
+@@ -976,9 +976,9 @@ struct SubscriptionPage {
+         this.NavItem(true, '☰', '订阅', () => {})
+       }
+       .width('100%')
+-      .padding(6)
+-      .constraintSize({ minHeight: 72 })
+-      .borderRadius(28)
++      .padding(5)
++      .constraintSize({ minHeight: 56 })
++      .borderRadius(24)
+       .backgroundColor('#F024263A')
+       .borderWidth(1)
+       .borderColor(Ui.border)
+@@ -986,26 +986,26 @@ struct SubscriptionPage {
+       .shadow({ radius: 20, color: '#242F5BFF', offsetY: 5 })
+ 
+       Text(`SSRVPN for HarmonyOS v${AppInfo.version()}`)
+-        .fontSize(11).fontColor(Ui.textTertiary)
++        .fontSize(10).fontColor(Ui.textTertiary)
+     }
+     .width('92%')
+     .constraintSize({ maxWidth: Ui.bottomNavMaxWidth })
+-    .margin({ bottom: 10 })
++    .margin({ bottom: 6 })
+   }
+ 
+   @Builder
+   NavItem(selected: boolean, icon: string, label: string, onTap: () => void) {
+     Column({ space: 2 }) {
+-      Text(icon).fontSize(20).fontColor(selected ? Ui.textPrimary : Ui.textSecondary)
++      Text(icon).fontSize(17).fontColor(selected ? Ui.textPrimary : Ui.textSecondary)
+       Text(label)
+-        .fontSize(12)
++        .fontSize(11)
+         .fontWeight(selected ? FontWeight.Bold : FontWeight.Medium)
+         .fontColor(selected ? Ui.textPrimary : Ui.textSecondary)
+     }
+     .layoutWeight(1)
+     .constraintSize({ minWidth: 0 })
+-    .padding({ top: 8, bottom: 8 })
+-    .borderRadius(22)
++    .padding({ top: 6, bottom: 6 })
++    .borderRadius(18)
+     .backgroundColor(selected ? '#29' + Ui.primary.substring(1) : Color.Transparent)
+     .onClick(() => onTap())
+   }
+diff --git a/SSRVPN_HarmonyOS/entry/src/main/ets/theme/AppTheme.ets b/SSRVPN_HarmonyOS/entry/src/main/ets/theme/AppTheme.ets
+index 456ffc4..758c3dc 100644
+--- a/SSRVPN_HarmonyOS/entry/src/main/ets/theme/AppTheme.ets
++++ b/SSRVPN_HarmonyOS/entry/src/main/ets/theme/AppTheme.ets
+@@ -5,7 +5,7 @@
+  */
+ export class AppTheme {
+   // ── 品牌色 ──
+-  static readonly primaryColor: string = '#2F6BFF';
++  static readonly primaryColor: string = '#2E64E6';
+   static readonly primaryLight: string = '#5B8CFF';
+   static readonly primaryDark: string = '#1E49D8';
+   static readonly accentColor: string = '#14B8A6';
+@@ -15,7 +15,7 @@ export class AppTheme {
+   static readonly successLight: string = '#34D399';
+   static readonly successMuted: string = '#0E7A3E';
+   static readonly warningColor: string = '#F59E0B';
+-  static readonly errorColor: string = '#EF4444';
++  static readonly errorColor: string = '#F87171';
+ 
+   // ── 暗色主题（默认） ──
+   static readonly darkBg: string = '#08090B';
+@@ -26,7 +26,7 @@ export class AppTheme {
+   static readonly darkBorderLight: string = '#3A414D';
+   static readonly darkTextPrimary: string = '#F4F6F8';
+   static readonly darkTextSecondary: string = '#A4ACB8';
+-  static readonly darkTextHint: string = '#717B8A';
++  static readonly darkTextHint: string = '#8A94A6';
+ 
+   // ── 亮色主题 ──
+   static readonly lightBg: string = '#F4F6F8';
+diff --git a/SSRVPN_HarmonyOS/entry/src/main/ets/theme/UiTokens.ets b/SSRVPN_HarmonyOS/entry/src/main/ets/theme/UiTokens.ets
+index d7d38e7..69b3325 100644
+--- a/SSRVPN_HarmonyOS/entry/src/main/ets/theme/UiTokens.ets
++++ b/SSRVPN_HarmonyOS/entry/src/main/ets/theme/UiTokens.ets
+@@ -20,6 +20,14 @@ export class Ui {
+   static readonly textTertiary: string = '#929BB1';
+   static readonly border: string = '#33FFFFFF';
+ 
++  // ── 2.1.4.1 色彩对比度整改: 正文文字 ≥4.5:1 专用变体 ──
++  // 品牌色 primaryBlue/error/primary 在白底卡片上只有 3.2~4.3, 作为正文不达标;
++  // 填充/描边继续用原品牌色(图形 ≥3:1 即可), 文字一律改用以下提亮版。
++  static readonly textBlue: string = '#6E9BFF';        // 卡片上 5.8:1
++  static readonly textError: string = '#F07984';       // 卡片上 5.8:1
++  static readonly textViolet: string = '#9E99FF';      // surfaceStrong 上 5.7:1
++  static readonly primaryBlueFill: string = '#2E64E6'; // 白字按钮底: 白字对比 5.2:1
++
+   static readonly pagePadding: number = 20;
+   static readonly cardRadius: number = 24;
+   static readonly compactBreakpoint: number = 460;
+diff --git a/SSRVPN_HarmonyOS/entry/src/main/ets/vpnability/VpnExtensionAbility.ets b/SSRVPN_HarmonyOS/entry/src/main/ets/vpnability/VpnExtensionAbility.ets
+index 94cfd2d..f19a6c4 100644
+--- a/SSRVPN_HarmonyOS/entry/src/main/ets/vpnability/VpnExtensionAbility.ets
++++ b/SSRVPN_HarmonyOS/entry/src/main/ets/vpnability/VpnExtensionAbility.ets
+@@ -250,6 +250,15 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
+       // 未启动过时停止属正常
+     }
+ 
++    // headless 测速模式(UI 预启动内核做真实协议测速): 不建 TUN、不请求 VPN
++    // 授权、不启 protect/心跳 —— 只拉起内核开 127.0.0.1 的 mixed+API 端口。
++    const headless = (params !== undefined && params !== null)
++      && ((params['headless'] as number) === 1);
++    if (headless) {
++      this.runHeadless(configPath);
++      return;
++    }
++
+     // IPv6 入站(UI 侧连接前探测物理网络后传入): 1=当前环境有 IPv6, 开双栈;
+     // 0/缺省=无 IPv6 环境, 自动绕过 —— 只装 IPv4 地址与默认路由, 不把设备
+     // 引上没有出口的 ::/0(否则 YouTube 等 IPv6-preferred 应用直接失联)。
+@@ -355,6 +364,25 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
+     }
+   }
+ 
++  /** headless 测速内核: 仅 startCore + 回写启动结果标记, 失败走同一错误通道 */
++  private async runHeadless(configPath: string): Promise<void> {
++    try {
++      AppLogger.info(TAG, 'headless test-core starting (no TUN / no VPN permission)');
++      const ok = await coreBridge.startCore(configPath);
++      if (!ok) {
++        const coreErr = await coreBridge.lastError();
++        throw new Error(coreErr.length > 0 ? coreErr : 'headless 内核启动失败');
++      }
++      this.reportStartOk(configPath);
++      AppLogger.info(TAG, 'headless test-core started');
++    } catch (e) {
++      const msg = e instanceof Error ? e.message : String(e);
++      this.reportStartError(configPath, `测速内核启动失败: ${msg}`);
++      AppLogger.error(TAG, `headless start failed: ${msg}`);
++      await this.cleanupResources();
++    }
++  }
++
+   onDestroy(): void {
+     AppLogger.info(TAG, 'vpn onDestroy');
+     this.cleanupResources().catch((e: Error) => {
+diff --git a/SSRVPN_HarmonyOS/entry/src/main/ets/widget/ToggleCard.ets b/SSRVPN_HarmonyOS/entry/src/main/ets/widget/ToggleCard.ets
+index 976bb48..4caa591 100644
+--- a/SSRVPN_HarmonyOS/entry/src/main/ets/widget/ToggleCard.ets
++++ b/SSRVPN_HarmonyOS/entry/src/main/ets/widget/ToggleCard.ets
+@@ -24,7 +24,7 @@ struct ToggleCard {
+       Button('连接 / 断开')
+         .fontSize(12)
+         .fontColor(Color.White)
+-        .backgroundColor('#2F6BFF')
++        .backgroundColor('#2E64E6')
+         .borderRadius(12)
+         .onClick(() => {
+           postCardAction(this, {
+diff --git a/SSRVPN_HarmonyOS/entry/src/main/module.json5 b/SSRVPN_HarmonyOS/entry/src/main/module.json5
+index 28fcfb8..b75b13a 100644
+--- a/SSRVPN_HarmonyOS/entry/src/main/module.json5
++++ b/SSRVPN_HarmonyOS/entry/src/main/module.json5
+@@ -24,7 +24,7 @@
+         "name": "EntryAbility",
+         "srcEntry": "./ets/entryability/EntryAbility.ets",
+         "description": "$string:ability_desc",
+-        "icon": "$media:app_icon",
++        "icon": "$media:layered_image",
+         "label": "$string:app_name",
+         "startWindowIcon": "$media:app_icon",
+         "startWindowBackground": "$color:start_window_background",
+@@ -35,8 +35,8 @@
+             "actions": ["action.system.home"]
+           }
+         ],
+-        // 长按桌面图标的静态快捷方式: 「启动代理」直连 EntryAbility 并带参数,
+-        // HomePage 消费 AppStorage 请求后免开页直接拨 VPN。
++        // 长按桌面图标的静态快捷方式: 「启动代理」由 QuickToggleAbility(无界面)
++        // 后台拨 VPN 后自毁, 不打开应用页面。
+         "metadata": [
+           {
+             "name": "ohos.ability.shortcuts",
+@@ -49,7 +49,7 @@
+         "name": "QuickToggleAbility",
+         "srcEntry": "./ets/quicktoggleability/QuickToggleAbility.ets",
+         "description": "$string:ability_desc",
+-        "icon": "$media:app_icon",
++        "icon": "$media:layered_image",
+         "label": "$string:app_name",
+         "startWindowIcon": "$media:app_icon",
+         "startWindowBackground": "$color:start_window_background",
+diff --git a/SSRVPN_HarmonyOS/entry/src/main/resources/base/media/app_icon.png b/SSRVPN_HarmonyOS/entry/src/main/resources/base/media/app_icon.png
+index 4d6372eebdb28e45604e46eeda8dd24651419bc0..43bab2cd30c3bb70661586e46c392d654e09c221 100644
+GIT binary patch
+literal 3439
+zcmW+(c{r5a8)nQf_T>|)v1VtcKB;dklR+{F6ACk<5|e!!WSOW@zmS-*G?Hy(EhXz{
+zvZkyfyO2;AT9hwjUw-d=f1LB4=f3XeexCcB>zwO)6R~!dqC!W6czAe3tuSXDfNv{z
+zKtaGf)x3iRKD?n0mS#K^eXwsp0QNGqHRa){q6+W2Lx5N?7~>ks!z1>VJ9s;T$~*xj
+zu+>>pr^w4cbIHL@qw<~o6D`|bbw$IsB!wx^;y)CQd|n4MYDt~qQtBXChf`rBI7KDQ
+z?(kxG_*BlzNlOPCN|e>|stNKw!D^1!rD~s$RvGBSrcaS0>O+4`<-BVWoai*z$eUrc
+z^zU|<Y<9YB%x#3$$XV(Udop~%-O|+|a~;SyPobw36?Xe4!B%q8&~71VjPW1%_4h4L
+ze)K(BjwNc6{rb;3=bb)^>vdUS+lxzMPK3+87kHf9{l02;!Mj_MQ!&2(W3j5OzmTe!
+z3~M@K8_VYt2TJsuu?UT>x$sF^^wix$P20hhgSuy=@xg7#P&l59RZ0yTcT^M`t=Ecr
+z@umY4;u!WtaL!M1oq=xiuGc83L<I<v_tkq9q%k5A%u@Jx*RISf)M-sDv$e|7lZDj8
+zUfN_5VA7hQpZ%$uq!27agyKQX;4aR$a_3q~4N8jLZb}*AOF@zTTkx<sV2Jf0<mB8r
+zu7GuGRcA4mn)im}CLmoV04SAnW*O))AR{m{=?*Adn67gO%cuaPrZc!PFN|!gBP#&0
+z=4U^Y(Hz*gU4v5ikI2)hu*|I?b(N*Z2f5Zdp>VMW2ze$7u`Fb)ER_9Ftyu=zx31}o
+zNVx@x^Pt}6%x*d<>1Jx~YD(n%yiiYo%?N@!6^hyIzcbM;h%cKMCFCR@g8*xR0`Osg
+zZ3eK7*JJ?^w6?5eDCP4w-*W;i7t%&z-DZN`OeoMevtP9&U}Oe8sjvXh_-D|TtI<G!
+zy#U8~hy$CnCJAM81Rq1eUSxeOSxW&xqtKp({0wMB3Hwt3|ACxY9vNr~>IglF?;=o8
+z<+e0X&>N2sGv<;*S;$s!8|f*(Dwn*^nY}FukefAS1?~X_iM&dHm){py$Y;Vp)3+Wb
+z71jdqp9{`FA9J0g5a~kz`wU#x(t=V+xQ(^r!aqnMBT@hydtBC18Gt1&SOD-H&bERz
+z*SW5<-n8&t4k)>kYf;yEERt)nk}x%!1xTa*J@+5^JFhs`BE8(}lMIwyELR}}Sga&G
+zoy|iBFTEiZQ*1!)tgv=bplfluPCya2JzZz@u0sGBB?XDALAg})rm6wTMHxRHOEyTQ
+zxLw@AeY}?W_U~g2^#}{4{LJ!SPqv0K7lcb66l)ywolep?W@DGtp9}rxrr$Y_?w2O;
+zcfvr;q6~KIPCE6SwU|y+{1df!kM{Rf<i|kD+r|CN+%s+5qt76PH}2g#v7<4-7<WCc
+z6?p;|J>arWocBfI$zb96Rg&8DzG?9RM=L<z=4kSvgM?j;wB7BK=8w?9Ov}rx^X)US
+z8f36PHTf`bBy(o0w1ejRgnt>4WH3}Zv15b4<1S9O0j|h|P}utflL$SBNTiIfzS*A_
+zeVG+)?krD#sx1?gRkc~b9(;EEfy(L6l8faVyOo5MB}paP`zoF5qZbOxv`QYEyCAGM
+zvk8(324SN&Fa`2$B&#Wfqwb(^5+)G{SXZf6DI-2|bekJ2WE{kyfarpVV0NBsL{BqC
+z*qjnnHF)J2fQ|LEr>fC*;BQH+M$~C32&o1D?Uzy!G$Sr{1(6a)@vH|jM%Tw*DbpJ1
+z-8y5XnY{v41g+0$Xg!?zOM+tlN$tlE(n?&i+SViSh!ip?F(9jv6ky^f@*+uOQx#Wf
+zLbyD0X<-vz9-Nn%H1`bsgqvp6C-?TdN>fC3Ohld7^q$+BedY>32j);ffYn2Knu#kt
+zb#uBkizTS*2W~I+B4WlO79)fVi!dyt0yM*xT|`fss4;S<#{3kk)1IXna%LlsVXwo}
+z-4M;FT>D&khi3#>KiImSSn-e@rHw4Yv5=RAGNRc8MCNK^Kvo>U*TrhXSBnUJtG@9g
+zy0V>QO2v$xIGba<A@2Y@UTWa)6~w$uc2pqqJcktGB&o?F3OH$Hu6~+OZfCb&z%cCK
+zN&Mo~SMKOIAQroCVD`9oMN@&Q*mUiZ{7H5BL^!PyB?kzs;P{^qU>xxM&N<u6!c$(o
+zEeFn(C|5c=O78~LnuXLBdbgiWezTGQh`%!gml0qV5UHeAl7YPw`zmlvThMK6PUBJp
+zl)yqh7FK;q=wo*%Cjjq>E^UNlaJ+`j3tU<}g`k<aIy9yHiu=&e{5Yh`-^C~hSxa*Y
+z*Rq3;+!`q)?60nLlELz}QIRPNi4&Z6XXT9Lnn!0O6;jb$t9^7IM?{J`D8RXp(D!2=
+z>rzSzX%+VDn4Ro9^7dhE=b43pybp2P-kj9&XT$dtfEPygD|In>a^oI(Iq{i~c*DmJ
+zvH53L&omn@53i1i#4tPg8__$*vphCVQb>NI(q*TDf^;J~If{K#H#&Pyg}*;IAIsOu
+zdmL-5U=rN@YNsZFgUy~>U0w6VukQCQZT)t{f7{$ry>(%_*OpApw~6JW4Vp3{jW5q!
+z!--`H88~H+=jD_#`PF+h{*p-_I#lHO=eB|3uf6g!Vm>O^c=LwQV9hGj%tG&!)ZqjD
+ztjb4pL@BWx6D2BGK@|H|ZN3eC2Yc<gOdEs$s9e0$x*64*m&U2}KLx)Pe`$nvzs}I0
+z=pov=_QB-p{0=1~w0rY^wPA9i6YD1^h6Zb?{P1C0B`UsSDRD9I;PhhRdrFmkT1fv;
+zTD`aHDfpFPSEbw=7;}oTpKDtlJ;xv$<gq}j>K~Z>$H!X@UcaEBObZnIrbQEg*DQUj
+zZ&LGGR|IX<bUoUt{ThDc=4A9*)k3E-O#wc9Ny!<1J*b~a&v88pDlEtB8yjw2T=#G;
+z`}jCN5HfT%K1`;om_Eu}*i*}E_~~Fby4~7k+5MFjHpE^U)Ogh<<vscb68DR?0I~|o
+zBHFi55$oGiA6qNqySof(gSC>JzmYz?{A`V5_I$xsqZ#;;7PJ(eUb#5aq=5fxlM|-b
+zcwa`hApMGaf1i&KI3oV0GA)BXv3@hMVC>i^MR_B=fI5^Y?ENJvY{id`W<S4MtSo_z
+z-&LV~<~B9jz7x<i;MY;z8nBV3eDdq&R_$kl=zbeII%q%&f$i@fbTa^#5YI?qT-d&o
+zE8k~h>T?bT`GN-CaOT&2^lu@u^BXc<Kux}ao+f8Y;S#UpS2EEc+@(o+{qgAtHtT3<
+z(|G}z^!ync%Zq~{_QQ$7Mquq~2+qzt$V*8=H~yvu_7c42XVk$`@&?L&N0vq*hK(Q7
+zzm=jk0Mc={fm1GffhPI~3w(e4UACGz*!?;z3X5B?r0Dqr#}*V=MmQVPr@^N_Xmrcm
+z()iqJ{#S{zV6EJ>`)b%7@oSCO#4MtXC5+}BDMNv-0h92Z*%%Wf*_>k*Jq%qL{=N3W
+zI(qRA9i1yv_Ag`|e$9+Q{P0rGpX?x?SL8UOd?1u@jvdMJCvVTEn-;Gzuha?aXQ$*^
+zY8aaf%M7+HPIyS{sDwa7T}_(2o{5>X;}`rW4!*7pC?Mm3QcMSpV&NH_aDq}Y{H3M1
+zP@&Xgp;~cn`EqZw#ra*KC3#%c2Osn6r7L1vZVUw+-KioQPUe3|%ZGHoco^2DZy3fe
+zk4l=Z(=4#d+IxQNynJkr;a$+*uLE5dNmW0)HTX2rDeb)l6pMLTN7t5LxUOackr$qd
+zs~O>XBVS6dv#|_tH?Xr-{{6v2Ui#hH?*g%Z%acsxQQ6aVkM??=Jh^A*7W6cIH;Rpf
+zL_i_m8BN6N2dFRj?@RgPvIEm^G0Ul{%L>txO-mtOvmo5s5wc;$P3qHQp`_QwqcAf{
+zv%q8l-?{vl-_6-A%^^L@KFb9~S9s;OPms^$t?7~9J^h3(ZC?C19~Na@Cjzl9`C{$g
+zw*E3Uct*z)OB0Doh-q+q9hYp&;h(TKc$#l$bQctEI`w;)FLqB#?vJh(-nO*Du`|1`
+zG{IaGJGSI=Cfz9Xq?W5WEI-Gv)C_PJxHVi=!>VDXDedIsDCVgwZiyA3$L<*D@0d#w
+zlElIVghu%2=6DKn-V|Wx@p5RBK#gKB^SKe0;lx{K{)^idA6AT23si`{%1%R5hWJOs
+ztb*i(G6Wg0v<3jaca`mrW%L5<YTP{#5uzDiv?L*v0Y3wfRC%yQs;`Kew8LlvRZ=`w
+z$-ULbH5m;oQfrs7qFP=@w4ymbFu`uWmZ-iho9bJlMdCuLhZhE(zfi5sb858I{!ku$
+z6w}>c66HNi?-+L7SNs>N^!w(G?`_#e)Z^u-D#Db}{)fK5Z0Z%K$h!nxqdQn7RUPi=
+j>PSACejsA%uy9}jZ*8twSpNk4B=J~T*qyB~yBha@GO%`$
+
+literal 1443
+zcmb`G{WsKk6vsdJTdFg%tJav9_E4vzrOaqkWF|A724Nly!y+?N9`Y<EGuRA6NX2Md
+zPqmGQbJPjRLrI#9?bL25ZHra>V6wZ}5(X(D_N(?!*n3`|_r0Hc?=PQw&*vnU?QTFY
+zB_M<hJUv`}aj#i9>sH|!j$PP;I}?dppoE_gA(4uc!jV&0!l7_;&p2^pxNo>PEcNJv
+za5_RT$o2Mf!<+r?&EbHH6nMoTsDOa;mN(wv8RNsHpG)`^ymG-S5By8<s&Q-yp4r*9
+z(t|8L&`vhm$wAg!MByQdFQW1h)eqSS&@P++v^xmx2}OHF$WDZ4QHUN37S3Sd0#=@|
+zD*$YR!8QbJ55gWH>=l9iVXzN_eG%Xg2@Xeq76tTZ*dGh~<G>Lo9vl;Zfs+W#BydUw
+zCkZ$o1LqWQO$FC9aKlLl*7x9^0q%0}$OMlp@Kk_jHXOjofdePND+j!A{q!8~Jn+s3
+z?~~w@4?egS02}8NuulUA=L~QQfm;MzCGd)XhiftT;+zFO&JVyp2mBww?;QByS_1w!
+zrQlx%{^cMj0|Bo1FjwY@Q8?Hx0cIPF*@-ZRFpPc#bBw{5@tD(5%sClzIfl8WU~V#u
+zm5Q;_F!wa$BSpqhN>W@2De?TKWR*!ujY;Yylk_X5#~V!L*Gw~;$%<BT_6>4Q8~Mad
+z@`-kG?yb$a9cHIApZDVZ^U6Xkp<*4rU82O7%}0jjHlK{id@?-wpN*fCHXyXh(bLt*
+zPc}H-x0e4E&nQ>y%B-(EL=9}RyC%MyX=upHuFhAk&MLbsF0LP-q`XnH78@fT+pKPW
+zu72MW`|?8h<N~B$l%}NU6KvLZj~&>t^tz$iC}ZwLp4tB;Q49K!QCF3@!iB1qOI=?w
+z7In!}F~ij(18UYUjnbmC!qKhPo%24?8U1x{7o(+?^Zu0Hx81|FuS?bJ0jgBhEMzf<
+zCgUq7r2OCB(`XkKcN-TL>u5y#dD6D!)5W?`O5)V^>jb)P)GBdy%t$uUMpf$SNV31$
+zb||OojAbvMP?T@$h_ZiFLFVHDmbyMhJF|-_)HX3%m=CDI+ID$0^C>kzxprBW)hw(v
+zr!Gmda);ICoQyhV_oP5+C%?jcG8v+D@9f?Dk*!BxY}dazmrT@64UrP3hlslANK)bq
+z$67n83eh}OeW&SV@HG95P|bjfqJ7gw$e+`Hxo!4cx`jdK1bJ>YDSpGKLPZ^1cv$ek
+zIB?0S<#tX?SJCLWdMd{-ME?$hc7A$zBOdIJ)4!KcAwb=VMov)nK;9z>x~rfT1>dS+
+zZ6#`2v@`jgbqq)P22H)Tx2CpmM^o1$B+xT6`(v%5xJ(?j#>Q$+rx_R|7TzDZe{J6q
+zG1*EcU%tE?!kO%^M;3aM6JN*LAKUVb^xz8-Pxo#jR5(-KBeLJvA@-gxNHx0M-ZJLl
+z;#JwQoh~9V?`UVo#}{6ka@II>++D@%KqGpMdlQ}?9E*wFcf5(#XQnP$Dk5~%iX^>f
+z<NEXJGYh+`9LE^Z1#g~OZ)yl?O>%$y;?M0BLp{O3a(-4A?ewryHrrD%cx#Q^%KY1H
+zNre$ve+vceSLZcNY4U(RBX&)oZn*Py()h)XkE?PL$!bNb{N5FVI2Y%LKEm%yvpyTP
+z(1P?z<YzdcoCZ;A^sD<`wcO1=DLw>~7YxD~Rf<<Lt&2H?f`^~9TW?0O(WnyXeZvF-
+hHxv6WEXUT@T$j&O|7sZ6iSVC<kf$5l^{TT-@h=>(a@_y`
+

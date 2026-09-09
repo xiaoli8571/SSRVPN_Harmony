@@ -24,7 +24,7 @@ struct ToggleCard {
       Button('连接 / 断开')
         .fontSize(12)
         .fontColor(Color.White)
-        .backgroundColor('#2F6BFF')
+        .backgroundColor('#2E64E6')
         .borderRadius(12)
         .onClick(() => {
           postCardAction(this, {

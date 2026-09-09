@@ -8,6 +8,8 @@
  */
 import { router, promptAction } from '@kit.ArkUI';
 import { pasteboard } from '@kit.BasicServicesKit';
+import { picker, fileIo as fs } from '@kit.CoreFileKit';
+import { util } from '@kit.ArkTS';
 import { Ui } from '../theme/UiTokens';
 import { SubscriptionService } from '../commons/services/SubscriptionService';
 import { Subscription, SubscriptionRefreshStatus } from '../commons/models/Subscription';
@@ -120,7 +122,7 @@ struct EditSubscriptionDialog {
           })
         Button('保存')
           .layoutWeight(1)
-          .backgroundColor(Ui.primaryBlue)
+          .backgroundColor(Ui.primaryBlueFill)
           .fontColor(Color.White)
           .onClick(() => {
             if (this.controller !== undefined) {
@@ -211,7 +213,7 @@ struct DiagnosticsLogDialog {
             Text('🔄').fontSize(13)
           }
           Text('重新检查')
-            .fontSize(13).fontColor(Ui.primaryBlue)
+            .fontSize(13).fontColor(Ui.textBlue)
         }
         .onClick(() => {
           this.recheck();
@@ -512,6 +514,7 @@ struct SubscriptionPage {
   @State inputUrl: string = '';
   @State isAdding: boolean = false;
   @State isRefreshing: boolean = false;
+  @State isImporting: boolean = false;
   @State refreshMessage: string = '';
   @State refreshMessageColor: string = Ui.primary;
   @State deleteTargetId: string = '';
@@ -621,9 +624,56 @@ struct SubscriptionPage {
     this.isAdding = false;
   }
 
+  /**
+   * 导入本地 YAML 文件: 系统文档选择器挑 .yaml/.yml/.txt → 读取文本 →
+   * service.addLocalYaml 复用网络订阅同款解析链(Clash YAML/链接列表)。
+   */
+  private async importYamlFile(): Promise<void> {
+    if (this.isImporting) {
+      return;
+    }
+    this.isImporting = true;
+    try {
+      const docPicker = new picker.DocumentViewPicker(getContext(this) as Context);
+      const opts = new picker.DocumentSelectOptions();
+      opts.maxSelectNumber = 1;
+      opts.fileSuffixFilters = ['.yaml', '.yml', '.txt'];
+      const uris = await docPicker.select(opts);
+      if (uris.length === 0) {
+        return; // 用户取消
+      }
+      const uri = uris[0];
+      const file = fs.openSync(uri, fs.OpenMode.READ_ONLY);
+      try {
+        const stat = fs.statSync(file.fd);
+        if (stat.size <= 0 || stat.size > 4 * 1024 * 1024) {
+          this.showError('文件大小需在 4MB 以内');
+          return;
+        }
+        const buf = new ArrayBuffer(Number(stat.size));
+        const readLen = fs.readSync(file.fd, buf);
+        const text = util.TextDecoder.create('utf-8').decodeToString(new Uint8Array(buf, 0, readLen));
+        const fileName = uri.substring(uri.lastIndexOf('/') + 1);
+        const count = await this.service.addLocalYaml(fileName, text);
+        if (count > 0) {
+          this.showError(`文件导入成功，解析出 ${count} 个节点`);
+          this.reload();
+        } else {
+          this.showError('文件未解析出节点（支持 Clash YAML 与 ss/vless/vmess/trojan/hy2 链接列表）');
+        }
+      } finally {
+        fs.closeSync(file);
+      }
+    } catch (e) {
+      AppLogger.warn(TAG, `yaml file import failed: ${e instanceof Error ? e.message : String(e)}`);
+      this.showError('导入失败，请重试');
+    } finally {
+      this.isImporting = false;
+    }
+  }
+
   /** 全部刷新（对应 SubscriptionScreenController.refreshAll） */
-  private async refreshAll(): Promise<void> {
-    if (this.isAdding || this.isRefreshing) {
+  private async refreshAll(): Promise<void> {    if (this.isAdding || this.isRefreshing) {
       return;
     }
     this.isRefreshing = true;
@@ -791,10 +841,23 @@ struct SubscriptionPage {
                   .fontSize(17)
                   .fontWeight(FontWeight.Bold)
                   .fontColor(Color.White)
-                  .backgroundColor(this.isAdding ? '#6B3675FF' : Ui.primaryBlue)
+                  .backgroundColor(this.isAdding ? '#6B2E64E6' : Ui.primaryBlue)
                   .borderRadius(16)
                   .enabled(!(this.isAdding || this.isRefreshing))
                   .onClick(() => this.addSubscription())
+
+                Blank().height(12)
+                Button(this.isImporting ? '导入中…' : '📂 导入本地 YAML 文件')
+                  .width('100%')
+                  .height(46)
+                  .fontSize(15)
+                  .fontColor(Ui.textPrimary)
+                  .backgroundColor(Ui.surface)
+                  .borderRadius(14)
+                  .borderWidth(1)
+                  .borderColor(Ui.border)
+                  .enabled(!(this.isAdding || this.isRefreshing || this.isImporting))
+                  .onClick(() => this.importYamlFile())
               }
               .width('100%')
               .padding(22)
@@ -812,14 +875,14 @@ struct SubscriptionPage {
                   .fontSize(21).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
                 Text(`${this.subs.length}`)
                   .fontSize(13).fontWeight(FontWeight.Bold)
-                  .fontColor(Ui.primaryBlue)
+                  .fontColor(Ui.textBlue)
                   .padding({ left: 9, right: 9, top: 3, bottom: 3 })
                   .borderRadius(10)
                   .backgroundColor('#29' + Ui.primaryBlue.substring(1))
                   .margin({ left: 9 })
                 Blank()
                 Text(this.isRefreshing ? '取消刷新' : '全部刷新')
-                  .fontSize(14).fontColor(Ui.primaryBlue)
+                  .fontSize(14).fontColor(Ui.textBlue)
                   .onClick(() => {
                     if (this.isRefreshing) {
                       this.isRefreshing = false;
@@ -879,7 +942,7 @@ struct SubscriptionPage {
                   Column() {
                     Row({ space: 14 }) {
                       Column() {
-                        Text('📡').fontSize(20).fontColor(Ui.primaryBlue)
+                        Text('📡').fontSize(20).fontColor(Ui.textBlue)
                       }
                       .width(48).height(48)
                       .borderRadius(14)
@@ -905,7 +968,7 @@ struct SubscriptionPage {
                         .padding(6)
                         .onClick(() => this.openEdit(sub))
                       Text('🗑')
-                        .fontSize(18).fontColor(Ui.error)
+                        .fontSize(18).fontColor(Ui.textError)
                         .padding(6)
                         .onClick(() => {
                           this.deleteTargetId = sub.id;
@@ -950,7 +1013,7 @@ struct SubscriptionPage {
             .width('100%')
             .alignItems(HorizontalAlign.Start)
           }
-          .padding({ left: 18, right: 18, top: 0, bottom: 130 })
+          .padding({ left: 18, right: 18, top: 0, bottom: 104 })
         }
         .width('100%').height('100%')
         .scrollBar(BarState.Off)
@@ -976,9 +1039,9 @@ struct SubscriptionPage {
         this.NavItem(true, '☰', '订阅', () => {})
       }
       .width('100%')
-      .padding(6)
-      .constraintSize({ minHeight: 72 })
-      .borderRadius(28)
+      .padding(5)
+      .constraintSize({ minHeight: 56 })
+      .borderRadius(24)
       .backgroundColor('#F024263A')
       .borderWidth(1)
       .borderColor(Ui.border)
@@ -986,26 +1049,26 @@ struct SubscriptionPage {
       .shadow({ radius: 20, color: '#242F5BFF', offsetY: 5 })
 
       Text(`SSRVPN for HarmonyOS v${AppInfo.version()}`)
-        .fontSize(11).fontColor(Ui.textTertiary)
+        .fontSize(10).fontColor(Ui.textTertiary)
     }
     .width('92%')
     .constraintSize({ maxWidth: Ui.bottomNavMaxWidth })
-    .margin({ bottom: 10 })
+    .margin({ bottom: 6 })
   }
 
   @Builder
   NavItem(selected: boolean, icon: string, label: string, onTap: () => void) {
     Column({ space: 2 }) {
-      Text(icon).fontSize(20).fontColor(selected ? Ui.textPrimary : Ui.textSecondary)
+      Text(icon).fontSize(17).fontColor(selected ? Ui.textPrimary : Ui.textSecondary)
       Text(label)
-        .fontSize(12)
+        .fontSize(11)
         .fontWeight(selected ? FontWeight.Bold : FontWeight.Medium)
         .fontColor(selected ? Ui.textPrimary : Ui.textSecondary)
     }
     .layoutWeight(1)
     .constraintSize({ minWidth: 0 })
-    .padding({ top: 8, bottom: 8 })
-    .borderRadius(22)
+    .padding({ top: 6, bottom: 6 })
+    .borderRadius(18)
     .backgroundColor(selected ? '#29' + Ui.primary.substring(1) : Color.Transparent)
     .onClick(() => onTap())
   }

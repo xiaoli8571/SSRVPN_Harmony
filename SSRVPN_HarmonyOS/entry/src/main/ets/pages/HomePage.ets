@@ -19,6 +19,7 @@ import { DiagnosticsSheet } from '../widgets/DiagnosticsSheet';
 import { PowerButton } from '../components/PowerButton';
 import { AppLogger } from '../commons/utils/AppLogger';
 import { AppInfo } from '../commons/utils/AppInfo';
+import { display } from '@kit.ArkUI';
 
 const TAG = 'HomePage';
 
@@ -36,7 +37,7 @@ struct AboutDialog {
       // 检查更新暂不启用（后续需要时再接入自有更新源）
       Button('关闭')
         .width('100%')
-        .backgroundColor(Ui.primaryBlue)
+        .backgroundColor(Ui.primaryBlueFill)
         .fontColor(Color.White)
         .onClick(() => {
           if (this.controller !== undefined) {
@@ -72,7 +73,7 @@ struct TutorialDialog {
         Row({ space: 10 }) {
           Text(`${idx + 1}`)
             .fontSize(13).fontWeight(FontWeight.Bold)
-            .fontColor(Ui.primaryBlue)
+            .fontColor(Ui.textBlue)
             .width(22).height(22)
             .borderRadius(11)
             .backgroundColor('#293675FF')
@@ -84,7 +85,7 @@ struct TutorialDialog {
       }, (step: string) => step)
       Button('知道了')
         .width('100%')
-        .backgroundColor(Ui.primaryBlue)
+        .backgroundColor(Ui.primaryBlueFill)
         .fontColor(Color.White)
         .onClick(() => {
           if (this.controller !== undefined) {
@@ -119,6 +120,8 @@ struct HomePage {
   @State upTotal: number = 0;
   @State downTotal: number = 0;
   @State buttonPressed: boolean = false;
+  /** 电源按钮直径: 按屏宽自适应(手机≈40% 宽, 平板封顶 210), 修复手机上比例失衡 */
+  @State powerSize: number = 210;
   /** 桌面长按快捷方式/服务卡片启动请求: EntryAbility 递增 seq + 写 mode, 这里消费 */
   @StorageLink('vpn_request_seq') @Watch('onVpnRequest') vpnRequestSeq: number = 0;
   private pageReady: boolean = false;
@@ -145,6 +148,14 @@ struct HomePage {
     await SettingsService.init(ctx);
     await this.subs.init(ctx);
     this.settings = await SettingsService.load();
+    // 电源按钮随屏宽自适应: 手机(≈433vp)取 40% 宽 ≈ 173, 平板封顶 210
+    try {
+      const disp = display.getDefaultDisplaySync();
+      const widthVp = disp.width / disp.densityPixels;
+      this.powerSize = Math.round(Math.min(210, Math.max(150, widthVp * 0.40)));
+    } catch (e) {
+      this.powerSize = 180;
+    }
     if (!this.listenerBound) {
       this.listenerBound = true;
       this.orchestrator.listeners.push(() => {
@@ -342,7 +353,7 @@ struct HomePage {
                 .onClick(() => this.aboutDialog.open())
               Blank()
               Text('SSRVPN')
-                .fontSize(29)
+                .fontSize(26)
                 .fontWeight(FontWeight.Normal)
                 .fontColor(Ui.textPrimary)
                 .letterSpacing(0.4)
@@ -353,7 +364,7 @@ struct HomePage {
                 .onClick(() => this.tutorialDialog.open())
             }
             .width('100%')
-            .height(54)
+            .height(48)
 
             Blank().height(10)
 
@@ -370,20 +381,20 @@ struct HomePage {
             .borderWidth(1)
             .borderColor(this.statusColor() === Ui.textSecondary ? '#2EA7AFC2' : '#2EFFFFFF')
 
-            Blank().height(42)
+            Blank().height(28)
 
             // ── 电源按钮（PowerButton 组件: 外环描边+内圆+SVG 电源图标） ──
             PowerButton({
               isConnected: this.isConnected,
               isConnecting: this.isConnecting,
               hasError: this.errorMessage.length > 0,
-              buttonSize: 210,
+              buttonSize: this.powerSize,
               onToggle: () => {
                 this.toggleConnection();
               }
             })
 
-            Blank().height(58)
+            Blank().height(34)
 
             // ── 当前节点卡 ──
             this.CurrentNodeCard()
@@ -395,7 +406,7 @@ struct HomePage {
             Row({ space: 10 }) {
               Column({ space: 4 }) {
                 Row({ space: 5 }) {
-                  Text('↑').fontSize(13).fontColor(Ui.primaryBlue)
+                  Text('↑').fontSize(13).fontColor(Ui.textBlue)
                   Text(this.formatSpeedValue(this.upSpeed))
                     .fontSize(15).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
                     .maxLines(1)
@@ -458,8 +469,8 @@ struct HomePage {
               Blank().height(14)
               if (this.errorMessage.length > 0) {
                 Row({ space: 6 }) {
-                  Text('⚠').fontSize(16).fontColor(Ui.error)
-                  Text(this.errorMessage).fontSize(13).fontColor(Ui.error).layoutWeight(1)
+                  Text('⚠').fontSize(16).fontColor(Ui.textError)
+                  Text(this.errorMessage).fontSize(13).fontColor(Ui.textError).layoutWeight(1)
                 }
                 .width('100%')
                 .onClick(() => {
@@ -488,7 +499,7 @@ struct HomePage {
             }
           }
           .constraintSize({ maxWidth: Ui.pageMaxWidth })
-          .padding({ left: 18, right: 18, top: 14, bottom: 130 })
+          .padding({ left: 18, right: 18, top: 14, bottom: 104 })
         }
         .width('100%').height('100%')
         .scrollBar(BarState.Off)
@@ -616,9 +627,9 @@ struct HomePage {
         })
       }
       .width('100%')
-      .padding(6)
-      .constraintSize({ minHeight: 72 })
-      .borderRadius(28)
+      .padding(5)
+      .constraintSize({ minHeight: 56 })
+      .borderRadius(24)
       .backgroundColor('#F024263A')
       .borderWidth(1)
       .borderColor(Ui.border)
@@ -626,26 +637,26 @@ struct HomePage {
       .shadow({ radius: 20, color: '#242F5BFF', offsetY: 5 })
 
       Text(`SSRVPN for HarmonyOS v${AppInfo.version()}`)
-        .fontSize(11).fontColor(Ui.textTertiary)
+        .fontSize(10).fontColor(Ui.textTertiary)
     }
     .width('92%')
     .constraintSize({ maxWidth: Ui.bottomNavMaxWidth })
-    .margin({ bottom: 10 })
+    .margin({ bottom: 6 })
   }
 
   @Builder
   NavItem(selected: boolean, icon: string, label: string, onTap: () => void) {
     Column({ space: 2 }) {
-      Text(icon).fontSize(20).fontColor(selected ? Ui.textPrimary : Ui.textSecondary)
+      Text(icon).fontSize(17).fontColor(selected ? Ui.textPrimary : Ui.textSecondary)
       Text(label)
-        .fontSize(12)
+        .fontSize(11)
         .fontWeight(selected ? FontWeight.Bold : FontWeight.Medium)
         .fontColor(selected ? Ui.textPrimary : Ui.textSecondary)
     }
     .layoutWeight(1)
     .constraintSize({ minWidth: 0 })
-    .padding({ top: 8, bottom: 8 })
-    .borderRadius(22)
+    .padding({ top: 6, bottom: 6 })
+    .borderRadius(18)
     .backgroundColor(selected ? '#29' + Ui.primary.substring(1) : Color.Transparent)
     .onClick(() => onTap())
   }
