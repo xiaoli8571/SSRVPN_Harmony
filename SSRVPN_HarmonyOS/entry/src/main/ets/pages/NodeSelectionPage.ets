@@ -62,7 +62,7 @@ struct NodeDeleteDialog {
     }
     .padding(22)
     .borderRadius(20)
-    .backgroundColor('#F0242641')
+    .backgroundColor(Ui.surfaceTranslucent)
     .borderWidth(1)
     .borderColor(Ui.border)
   }
@@ -92,12 +92,12 @@ struct SiteListDialog {
         .onChange((v: string) => { this.sitesText = v; })
         .height(150)
         .borderRadius(12)
-        .backgroundColor('#101426')
-        .fontColor('#F5F7FF')
-        .placeholderColor('#6E7894')
-        .caretColor('#8A84FF')
+        .backgroundColor(Ui.inputBackground)
+        .fontColor(Ui.textPrimary)
+        .placeholderColor(Ui.textTertiary)
+        .caretColor(Ui.primary)
         .borderWidth(1)
-        .borderColor('#3A4066')
+        .borderColor(Ui.borderStrong)
       Row({ space: 12 }) {
         Button('取消')
           .layoutWeight(1)
@@ -126,7 +126,7 @@ struct SiteListDialog {
     }
     .padding(24)
     .borderRadius(20)
-    .backgroundColor('#E6242641')
+    .backgroundColor(Ui.surfaceTranslucent)
     .borderWidth(1)
     .borderColor(Ui.border)
   }
@@ -482,11 +482,11 @@ struct NodeSelectionPage {
           Row({ space: 14 }) {
             Text(this.refreshing ? '◌' : '⟳')
               .fontSize(22)
-              .fontColor(this.refreshing ? Ui.primary : '#F2F4FF')
+              .fontColor(this.refreshing ? Ui.primary : Ui.textPrimary)
               .onClick(() => this.refreshNodes())
             Text(this.batchTesting ? '⏳' : '⚡')
               .fontSize(21)
-              .fontColor(this.batchTesting ? Ui.primary : '#F2F4FF')
+              .fontColor(this.batchTesting ? Ui.primary : Ui.textPrimary)
               .onClick(() => {
                 if (this.batchTesting) {
                   this.batchTesting = false;
@@ -521,12 +521,12 @@ struct NodeSelectionPage {
           .width('100%')
           .padding(4)
           .borderRadius(14)
-          .backgroundColor('#66182038')
+          .backgroundColor(Ui.inputBackground)
         }
         .width('100%')
         .padding(16)
         .borderRadius(20)
-        .backgroundColor('#E0242641')
+        .backgroundColor(Ui.surfaceMuted)
         .borderWidth(1)
         .borderColor(Ui.border)
         .margin({ top: 8 })
@@ -542,7 +542,7 @@ struct NodeSelectionPage {
           .justifyContent(FlexAlign.Center)
           .padding({ top: 9, bottom: 9 })
           .borderRadius(13)
-          .backgroundColor('#293675FF')
+          .backgroundColor(Ui.statusTint)
           .onClick(() => this.forceProxyDialog.open())
 
           Row({ space: 7 }) {
@@ -554,7 +554,7 @@ struct NodeSelectionPage {
           .justifyContent(FlexAlign.Center)
           .padding({ top: 9, bottom: 9 })
           .borderRadius(13)
-          .backgroundColor('#293675FF')
+          .backgroundColor(Ui.statusTint)
           .onClick(() => this.forceDirectDialog.open())
         }
         .width('100%')
@@ -578,7 +578,7 @@ struct NodeSelectionPage {
         .justifyContent(FlexAlign.Center)
         .padding({ top: 9, bottom: 9 })
         .borderRadius(13)
-        .backgroundColor('#2920C8B4')
+        .backgroundColor(Ui.statusTint)
         .margin({ top: 10 })
         .onClick(() => this.bypassAppsDialog.open())
 
@@ -591,7 +591,7 @@ struct NodeSelectionPage {
                 .fontColor(this.filterSubId.length === 0 ? Ui.textPrimary : Ui.textSecondary)
                 .padding({ left: 12, right: 12, top: 6, bottom: 6 })
                 .borderRadius(16)
-                .backgroundColor(this.filterSubId.length === 0 ? '#29' + Ui.primary.substring(1) : Ui.surface)
+                .backgroundColor(this.filterSubId.length === 0 ? Ui.selectedBackground : Ui.surface)
                 .borderWidth(1)
                 .borderColor(this.filterSubId.length === 0 ? Ui.primary : Ui.border)
                 .onClick(() => {
@@ -604,7 +604,7 @@ struct NodeSelectionPage {
                   .fontColor(this.filterSubId === chip.id ? Ui.textPrimary : Ui.textSecondary)
                   .padding({ left: 12, right: 12, top: 6, bottom: 6 })
                   .borderRadius(16)
-                  .backgroundColor(this.filterSubId === chip.id ? '#29' + Ui.primary.substring(1) : Ui.surface)
+                  .backgroundColor(this.filterSubId === chip.id ? Ui.selectedBackground : Ui.surface)
                   .borderWidth(1)
                   .borderColor(this.filterSubId === chip.id ? Ui.primary : Ui.border)
                   .onClick(() => {
@@ -661,20 +661,20 @@ struct NodeSelectionPage {
     Row({ space: 6 }) {
       Text(icon)
         .fontSize(14)
-        .fontColor(this.proxyMode === mode ? '#B9AEFF' : Ui.textSecondary)
+        .fontColor(this.proxyMode === mode ? Ui.textViolet : Ui.textSecondary)
       Text(label)
         .fontSize(14)
         .fontWeight(FontWeight.Bold)
-        .fontColor(this.proxyMode === mode ? '#B9AEFF' : Ui.textSecondary)
+        .fontColor(this.proxyMode === mode ? Ui.textViolet : Ui.textSecondary)
     }
     .justifyContent(FlexAlign.Center)
     .layoutWeight(1)
     .padding({ top: 9, bottom: 9 })
     .borderRadius(11)
-    .backgroundColor(this.proxyMode === mode ? '#406A5CFF' : Color.Transparent)
+    .backgroundColor(this.proxyMode === mode ? Ui.selectedBackground : Color.Transparent)
     .borderWidth(this.proxyMode === mode ? 1 : 0)
-    .borderColor(this.proxyMode === mode ? '#8C7FFF' : Color.Transparent)
-    .onClick(() => {
+    .borderColor(this.proxyMode === mode ? Ui.primary : Color.Transparent)
+.onClick(() => {
       if (this.proxyMode === mode) {
         return;
       }
@@ -721,8 +721,8 @@ struct NodeSelectionPage {
     .width('100%')
     .padding({ left: 14, right: 6, top: 7, bottom: 7 })
     .borderRadius(17)
-    .backgroundColor(row.node.name === this.selectedName ? Ui.surfaceStrong : '#E0242641')
+    .backgroundColor(row.node.name === this.selectedName ? Ui.surfaceStrong : Ui.surfaceMuted)
     .borderWidth(1)
-    .borderColor(row.node.name === this.selectedName ? '#94' + Ui.primary.substring(1) : Ui.border)
+    .borderColor(row.node.name === this.selectedName ? Ui.primary : Ui.border)
   }
 }

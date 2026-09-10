@@ -58,12 +58,47 @@ export class SubscriptionService {
       AppLogger.warn(TAG, 'invalid hidden nodes preferences ignored');
     }
 
+    // 历史数据可能存在重名节点(内核会拒绝启动), 加载时即去重并落库
+    if (this.ensureUniqueNames()) {
+      await this.persist();
+    }
+
     AppLogger.info(TAG, `loaded ${this.subscriptions.length} subscriptions, ${this.nodes.length} nodes`);
   }
 
-  /** 节点稳定指纹（跨刷新不变, 用于删除记忆） */
+  /** 节点稳定指纹（跨刷新不变, 用于删除记忆）。name 用去重前的原始名, 与刷新解析结果一致 */
   static nodeKey(n: ProxyNode): string {
-    return `${n.subscriptionId}|${n.server}|${n.port}|${n.name}`;
+    return `${n.subscriptionId}|${n.server}|${n.port}|${SubscriptionService.baseName(n.name)}`;
+  }
+
+  /** 去掉 " #2" 类去重后缀, 还原节点原始名 */
+  private static baseName(name: string): string {
+    return name.replace(/\s#\d+$/, '');
+  }
+
+  /**
+   * 全局节点名去重: mihomo 对 proxies 段重名直接拒绝启动
+   * ("parse config: proxy X is the duplicate name") —— 一个重名会让
+   * 整个内核起不来, 所有节点都连不上。按列表顺序给重名节点追加
+   * " #2/#3..." 后缀; UI/PROXY 组/内核配置/API 选节点共用此名, 天然一致。
+   * 返回是否发生了改名。
+   */
+  ensureUniqueNames(): boolean {
+    const used = new Set<string>();
+    let changed = false;
+    for (const n of this.nodes) {
+      const original = n.name;
+      if (used.has(original)) {
+        let k = 2;
+        while (used.has(`${original} #${k}`)) {
+          k = k + 1;
+        }
+        n.name = `${original} #${k}`;
+        changed = true;
+      }
+      used.add(n.name);
+    }
+    return changed;
   }
 
   /**
@@ -378,6 +413,7 @@ export class SubscriptionService {
         parsed = parsed.filter((n) => !this.hiddenNodes.includes(SubscriptionService.nodeKey(n)));
       }
       this.nodes = this.nodes.filter((n) => n.subscriptionId !== id).concat(parsed);
+      this.ensureUniqueNames();
       sub.nodeCount = parsed.length;
       sub.lastFetchedAt = Date.now();
       sub.lastRefreshResult = SubscriptionRefreshStatus.OK;
@@ -428,6 +464,7 @@ export class SubscriptionService {
     }
     this.subscriptions.push(sub);
     this.nodes = this.nodes.concat(parsed);
+    this.ensureUniqueNames();
     sub.nodeCount = parsed.length;
     sub.lastFetchedAt = Date.now();
     sub.lastRefreshResult = SubscriptionRefreshStatus.OK;
@@ -457,6 +494,7 @@ export class SubscriptionService {
       return -1;
     }
     this.nodes.push(node);
+    this.ensureUniqueNames();
     await this.persist();
     return 1;
   }

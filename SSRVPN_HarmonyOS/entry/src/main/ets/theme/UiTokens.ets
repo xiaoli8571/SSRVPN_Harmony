@@ -3,30 +3,43 @@
  * 这是真实安卓版使用的现代色板（app_theme.dart 为旧版兼容色，勿再使用）。
  */
 
-/** 设计令牌（值逐项照抄 upstream SsrvpnUiTokens） */
+/** 随系统深浅模式自动解析的语义设计令牌。 */
 export class Ui {
-  static readonly background: string = '#0A1020';
-  static readonly backgroundRaised: string = '#14152F';
-  static readonly surface: string = '#242641';
-  static readonly surfaceStrong: string = '#2C2E4B';
-  static readonly primary: string = '#8A84FF';
-  static readonly primaryBlue: string = '#3675FF';
-  static readonly accent: string = '#20C8B4';
-  static readonly success: string = '#29C978';
-  static readonly warning: string = '#F3B83F';
-  static readonly error: string = '#E35D6A';
-  static readonly textPrimary: string = '#F5F7FF';
-  static readonly textSecondary: string = '#A7AFC2';
-  static readonly textTertiary: string = '#929BB1';
-  static readonly border: string = '#33FFFFFF';
-
-  // ── 2.1.4.1 色彩对比度整改: 正文文字 ≥4.5:1 专用变体 ──
-  // 品牌色 primaryBlue/error/primary 在白底卡片上只有 3.2~4.3, 作为正文不达标;
-  // 填充/描边继续用原品牌色(图形 ≥3:1 即可), 文字一律改用以下提亮版。
-  static readonly textBlue: string = '#6E9BFF';        // 卡片上 5.8:1
-  static readonly textError: string = '#F07984';       // 卡片上 5.8:1
-  static readonly textViolet: string = '#9E99FF';      // surfaceStrong 上 5.7:1
-  static readonly primaryBlueFill: string = '#2E64E6'; // 白字按钮底: 白字对比 5.2:1
+  static readonly background: ResourceColor = $r('app.color.ui_background');
+  static readonly backgroundRaised: ResourceColor = $r('app.color.ui_background_raised');
+  static readonly surface: ResourceColor = $r('app.color.ui_surface');
+  static readonly surfaceStrong: ResourceColor = $r('app.color.ui_surface_strong');
+  static readonly surfaceTranslucent: ResourceColor = $r('app.color.ui_surface_translucent');
+  static readonly surfaceMuted: ResourceColor = $r('app.color.ui_surface_muted');
+  static readonly inputBackground: ResourceColor = $r('app.color.ui_input_background');
+  static readonly primary: ResourceColor = $r('app.color.ui_primary');
+  static readonly primaryBlue: ResourceColor = $r('app.color.ui_primary_blue');
+  static readonly primaryBlueFill: ResourceColor = $r('app.color.ui_primary_blue_fill');
+  static readonly accent: ResourceColor = $r('app.color.ui_accent');
+  static readonly success: ResourceColor = $r('app.color.ui_success');
+  static readonly warning: ResourceColor = $r('app.color.ui_warning');
+  static readonly error: ResourceColor = $r('app.color.ui_error');
+  static readonly textPrimary: ResourceColor = $r('app.color.ui_text_primary');
+  static readonly textSecondary: ResourceColor = $r('app.color.ui_text_secondary');
+  static readonly textTertiary: ResourceColor = $r('app.color.ui_text_tertiary');
+  static readonly textOnBrand: ResourceColor = $r('app.color.ui_text_on_brand');
+  static readonly textBlue: ResourceColor = $r('app.color.ui_text_blue');
+  static readonly textError: ResourceColor = $r('app.color.ui_text_error');
+  static readonly textViolet: ResourceColor = $r('app.color.ui_text_violet');
+  static readonly border: ResourceColor = $r('app.color.ui_border');
+  static readonly borderStrong: ResourceColor = $r('app.color.ui_border_strong');
+  static readonly buttonDisabled: ResourceColor = $r('app.color.ui_button_disabled');
+  static readonly overlay: ResourceColor = $r('app.color.ui_overlay');
+  static readonly shadow: ResourceColor = $r('app.color.ui_shadow');
+  static readonly navBackground: ResourceColor = $r('app.color.ui_nav_background');
+  static readonly selectedBackground: ResourceColor = $r('app.color.ui_selected_background');
+  static readonly statusTint: ResourceColor = $r('app.color.ui_status_tint');
+  static readonly powerGlowActive: ResourceColor = $r('app.color.ui_power_glow_active');
+  static readonly powerGlowIdle: ResourceColor = $r('app.color.ui_power_glow_idle');
+  static readonly powerRingActive: ResourceColor = $r('app.color.ui_power_ring_active');
+  static readonly powerRingIdle: ResourceColor = $r('app.color.ui_power_ring_idle');
+  static readonly powerInnerActive: ResourceColor = $r('app.color.ui_power_inner_active');
+  static readonly powerInnerIdle: ResourceColor = $r('app.color.ui_power_inner_idle');
 
   static readonly pagePadding: number = 20;
   static readonly cardRadius: number = 24;
@@ -35,9 +48,11 @@ export class Ui {
   static readonly bottomNavMaxWidth: number = 380;
   static readonly currentNodeMaxWidth: number = 320;
 
-  /** 背景渐变（SsrvpnAppBackdrop：左上→右下三段） */
-  static readonly backdropColors: Array<[string, number]> = [
-    ['#181B3B', 0.0], ['#0A1020', 0.48], ['#09152A', 1.0]
+  /** 背景渐变由 base/dark 同名资源自动切换。 */
+  static readonly backdropColors: Array<[ResourceColor, number]> = [
+    [$r('app.color.ui_backdrop_start'), 0.0],
+    [$r('app.color.ui_backdrop_middle'), 0.48],
+    [$r('app.color.ui_backdrop_end'), 1.0]
   ];
 }
 
@@ -49,7 +64,7 @@ export class LatencyStyle {
     return latency !== null && (latency <= 0 || latency >= LatencyStyle.TIMEOUT_MS);
   }
 
-  static color(latency: number | null): string {
+  static color(latency: number | null): ResourceColor {
     if (latency === null) {
       return Ui.textSecondary;
     }

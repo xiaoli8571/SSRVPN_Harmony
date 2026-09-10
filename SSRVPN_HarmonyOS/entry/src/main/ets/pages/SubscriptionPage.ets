@@ -74,7 +74,7 @@ struct DeleteConfirmDialog {
     }
     .padding(24)
     .borderRadius(20)
-    .backgroundColor('#E6242641')
+    .backgroundColor(Ui.surfaceStrong)
     .borderWidth(1)
     .borderColor(Ui.border)
   }
@@ -97,19 +97,19 @@ struct EditSubscriptionDialog {
 
   build() {
     Column({ space: 14 }) {
-      Text('编辑订阅').fontSize(18).fontWeight(FontWeight.Bold).fontColor('#1A1F2E')
+      Text('编辑订阅').fontSize(18).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
       TextInput({ placeholder: '订阅名称', text: this.editName })
         .onChange((v: string) => { this.editName = v; })
         .height(46).borderRadius(12)
-        .backgroundColor('#F5F7FF')
-        .fontColor('#1A1F2E')
-        .placeholderColor('#8A93A6')
+        .backgroundColor(Ui.inputBackground)
+        .fontColor(Ui.textPrimary)
+        .placeholderColor(Ui.textTertiary)
       TextInput({ placeholder: '订阅链接', text: this.editUrl })
         .onChange((v: string) => { this.editUrl = v; })
         .height(46).borderRadius(12)
-        .backgroundColor('#F5F7FF')
-        .fontColor('#1A1F2E')
-        .placeholderColor('#8A93A6')
+        .backgroundColor(Ui.inputBackground)
+        .fontColor(Ui.textPrimary)
+        .placeholderColor(Ui.textTertiary)
       Row({ space: 12 }) {
         Button('取消')
           .layoutWeight(1)
@@ -135,9 +135,9 @@ struct EditSubscriptionDialog {
     }
     .padding(24)
     .borderRadius(20)
-    .backgroundColor('#F0F2F8')
+    .backgroundColor(Ui.surfaceStrong)
     .borderWidth(1)
-    .borderColor('#C9CEDC')
+    .borderColor(Ui.borderStrong)
   }
 }
 
@@ -245,7 +245,7 @@ struct DiagnosticsLogDialog {
             .alignItems(VerticalAlign.Top)
             .padding(12)
             .borderRadius(12)
-            .backgroundColor('#171B2A')
+            .backgroundColor(Ui.surfaceMuted)
           }, (c: DiagCheck, idx: number) => `${idx}-${c.tone}-${c.summary}-${this.runLogTick}`)
 
           // 最近运行记录（对齐 upstream ExpansionTile: 有错误时默认展开）
@@ -286,7 +286,7 @@ struct DiagnosticsLogDialog {
               .width('100%')
               .padding(10)
               .borderRadius(10)
-              .backgroundColor('#101420')
+              .backgroundColor(Ui.surfaceMuted)
             }, (e: ReadableLog, idx: number) => `r${idx}-${this.runLogTick}`)
           }
 
@@ -315,7 +315,7 @@ struct DiagnosticsLogDialog {
               .width('100%')
               .padding(10)
               .borderRadius(10)
-              .backgroundColor('#0D1120')
+              .backgroundColor(Ui.inputBackground)
               .copyOption(CopyOptions.LocalDevice)
           }
         }
@@ -347,9 +347,9 @@ struct DiagnosticsLogDialog {
     .height('62%')
     .padding(18)
     .borderRadius(16)
-    .backgroundColor('#0E1018')
+    .backgroundColor(Ui.surfaceStrong)
     .borderWidth(1)
-    .borderColor('#2A2E45')
+    .borderColor(Ui.borderStrong)
   }
 
   private checkIcon(tone: string): string {
@@ -366,14 +366,14 @@ struct DiagnosticsLogDialog {
     return tone === 'warn' ? '提醒' : '失败';
   }
 
-  private checkColor(tone: string): string {
+  private checkColor(tone: string): ResourceColor {
     if (tone === 'ok') {
       return Ui.success;
     }
     return tone === 'warn' ? Ui.warning : Ui.error;
   }
 
-  private entryLevelColor(level: string): string {
+  private entryLevelColor(level: string): ResourceColor {
     if (level === '错误') {
       return Ui.error;
     }
@@ -516,7 +516,7 @@ struct SubscriptionPage {
   @State isRefreshing: boolean = false;
   @State isImporting: boolean = false;
   @State refreshMessage: string = '';
-  @State refreshMessageColor: string = Ui.primary;
+  @State refreshMessageColor: ResourceColor = Ui.primary;
   @State deleteTargetId: string = '';
   @State editTarget: Subscription | null = null;
   @State showUndoBanner: boolean = false;
@@ -830,7 +830,7 @@ struct SubscriptionPage {
                   .enabled(!(this.isAdding || this.isRefreshing))
                   .height(50)
                   .borderRadius(18)
-                  .backgroundColor('#181B2A')
+                  .backgroundColor(Ui.inputBackground)
                   .fontColor(Ui.textPrimary)
                   .placeholderColor(Ui.textTertiary)
                   .padding({ left: 16, right: 16 })
@@ -842,7 +842,7 @@ struct SubscriptionPage {
                   .fontSize(17)
                   .fontWeight(FontWeight.Bold)
                   .fontColor(Color.White)
-                  .backgroundColor(this.isAdding ? '#6B2E64E6' : Ui.primaryBlue)
+                  .backgroundColor(this.isAdding ? Ui.buttonDisabled : Ui.primaryBlue)
                   .borderRadius(16)
                   .enabled(!(this.isAdding || this.isRefreshing))
                   .onClick(() => this.addSubscription())
@@ -863,10 +863,10 @@ struct SubscriptionPage {
               .width('100%')
               .padding(22)
               .borderRadius(24)
-              .backgroundColor('#E0242641')
+              .backgroundColor(Ui.surfaceTranslucent)
               .borderWidth(1)
               .borderColor(Ui.border)
-              .shadow({ radius: 28, color: '#38000000', offsetY: 14 })
+              .shadow({ radius: 28, color: Ui.shadow, offsetY: 14 })
 
               Blank().height(30)
 
@@ -879,7 +879,7 @@ struct SubscriptionPage {
                   .fontColor(Ui.textBlue)
                   .padding({ left: 9, right: 9, top: 3, bottom: 3 })
                   .borderRadius(10)
-                  .backgroundColor('#29' + Ui.primaryBlue.substring(1))
+                  .backgroundColor(Ui.statusTint)
                   .margin({ left: 9 })
                 Blank()
                 Text(this.isRefreshing ? '取消刷新' : '全部刷新')
@@ -903,9 +903,9 @@ struct SubscriptionPage {
                   .width('100%')
                   .padding(12)
                   .borderRadius(14)
-                  .backgroundColor('#1F' + this.refreshMessageColor.substring(1))
+                  .backgroundColor(Ui.statusTint)
                   .borderWidth(1)
-                  .borderColor('#4D' + this.refreshMessageColor.substring(1))
+                  .borderColor(this.refreshMessageColor)
               }
 
               // ── 撤销删除条 ──
@@ -947,7 +947,7 @@ struct SubscriptionPage {
                       }
                       .width(48).height(48)
                       .borderRadius(14)
-                      .linearGradient({ angle: 135, colors: [['#1C315E', 0.0], ['#173D42', 1.0]] })
+                      .linearGradient({ angle: 135, colors: [[Ui.statusTint, 0.0], [Ui.surfaceMuted, 1.0]] })
                       .justifyContent(FlexAlign.Center)
 
                       Column({ space: 4 }) {
@@ -1001,10 +1001,10 @@ struct SubscriptionPage {
                   .width('100%')
                   .padding(18)
                   .borderRadius(22)
-                  .backgroundColor('#E0242641')
+                  .backgroundColor(Ui.surfaceTranslucent)
                   .borderWidth(1)
                   .borderColor(Ui.border)
-                  .shadow({ radius: 28, color: '#38000000', offsetY: 14 })
+                  .shadow({ radius: 28, color: Ui.shadow, offsetY: 14 })
                   .margin({ bottom: 12 })
                   .gesture(LongPressGesture().onAction(() => this.openEdit(sub)))
                 }, (sub: Subscription) => `${sub.id}|${sub.name}|${sub.nodeCount}|${sub.lastFetchedAt}|${sub.enabled ? 1 : 0}`)
@@ -1043,11 +1043,10 @@ struct SubscriptionPage {
       .padding(5)
       .constraintSize({ minHeight: 56 })
       .borderRadius(24)
-      .backgroundColor('#F024263A')
+      .backgroundColor(Ui.navBackground)
       .borderWidth(1)
       .borderColor(Ui.border)
-      .shadow({ radius: 30, color: '#66000000', offsetY: 16 })
-      .shadow({ radius: 20, color: '#242F5BFF', offsetY: 5 })
+      .shadow({ radius: 30, color: Ui.shadow, offsetY: 16 })
 
       Text(`SSRVPN for HarmonyOS v${AppInfo.version()}`)
         .fontSize(10).fontColor(Ui.textTertiary)
@@ -1070,7 +1069,7 @@ struct SubscriptionPage {
     .constraintSize({ minWidth: 0 })
     .padding({ top: 6, bottom: 6 })
     .borderRadius(18)
-    .backgroundColor(selected ? '#29' + Ui.primary.substring(1) : Color.Transparent)
+    .backgroundColor(selected ? Ui.selectedBackground : Color.Transparent)
     .onClick(() => onTap())
   }
 }

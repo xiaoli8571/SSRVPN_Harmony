@@ -74,6 +74,10 @@ export class ConnectionOrchestrator {
   private monitorTimer: number = -1;
   private trafficTimer: number = -1;
   private connectSeq: number = 0; // 启动代际门控（对应 StartGenerationGate）
+  /** 连接期间收到的断开意图。requestDisconnect 会立即使旧连接代际失效。 */
+  private disconnectRequested: boolean = false;
+  /** 重复 Form 事件复用同一停止 Promise，避免重复停止扩展和 native core。 */
+  private disconnectTask: Promise<void> | null = null;
   private context: Context | null = null;
   private apiSecret: string = '';
   private lastSubs: SubscriptionService | null = null;
@@ -90,6 +94,15 @@ export class ConnectionOrchestrator {
 
   init(context: Context): void {
     this.context = context;
+  }
+
+  requestDisconnect(): void {
+    this.disconnectRequested = true;
+    this.connectSeq = this.connectSeq + 1;
+  }
+
+  isDisconnectRequested(): boolean {
+    return this.disconnectRequested;
   }
 
   /**
@@ -329,6 +342,7 @@ export class ConnectionOrchestrator {
   }
 
   async connect(node: ProxyNode, subs: SubscriptionService): Promise<boolean> {
+    this.disconnectRequested = false;
     const seq = ++this.connectSeq;
     // 真实连接会重启扩展进程, headless 测速内核随之失效
     this.testCoreActive = false;
@@ -575,8 +589,23 @@ export class ConnectionOrchestrator {
     }
   }
 
-  async disconnect(): Promise<void> {
-    const seq = ++this.connectSeq;
+  disconnect(): Promise<void> {
+    this.requestDisconnect();
+    if (this.disconnectTask !== null) {
+      return this.disconnectTask;
+    }
+    const task = this.disconnectExclusive();
+    this.disconnectTask = task;
+    task.finally((): void => {
+      if (this.disconnectTask === task) {
+        this.disconnectTask = null;
+      }
+    });
+    return task;
+  }
+
+  private async disconnectExclusive(): Promise<void> {
+    const seq = this.connectSeq;
     this.state = ConnState.DISCONNECTING;
     this.notify();
     await this.disconnectInternal();
@@ -586,6 +615,7 @@ export class ConnectionOrchestrator {
     this.state = ConnState.DISCONNECTED;
     this.traffic = { uploadBytes: 0, downloadBytes: 0, uploadSpeed: 0, downloadSpeed: 0 };
     this.api.resetTrafficBaseline();
+    this.disconnectRequested = false;
     this.notify();
     AppLogger.info(TAG, 'disconnected');
   }

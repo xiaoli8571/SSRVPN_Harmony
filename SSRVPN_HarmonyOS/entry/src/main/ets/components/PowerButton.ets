@@ -9,6 +9,8 @@
  * top gap is rotated to 12 o'clock, and the vertical bar is a Column centered
  * with offset. All layers are plain Circle/Column primitives.
  */
+import { Ui } from '../theme/UiTokens';
+
 @Component
 export struct PowerButton {
   @Prop isConnected: boolean = false;
@@ -18,24 +20,15 @@ export struct PowerButton {
   onToggle: () => void = () => {};
   @State private pressed: boolean = false;
 
-  private static readonly ERROR: string = '#F5576D';
-  private static readonly SUCCESS: string = '#29C978';
-  private static readonly PRIMARY: string = '#8A84FF';
-  private static readonly TEXT_SECONDARY: string = '#8A93A6';
-
-  private activeColor(): string {
+  private activeColor(): ResourceColor {
     if (this.hasError) {
-      return PowerButton.ERROR;
+      return Ui.error;
     }
-    return this.isConnected ? PowerButton.SUCCESS : PowerButton.PRIMARY;
+    return this.isConnected ? Ui.success : Ui.primary;
   }
 
-  private withAlpha(hex: string, alphaHex: string): string {
-    return alphaHex + hex.substring(1);
-  }
-
-  private iconColor(): string {
-    return this.isConnected ? this.activeColor() : PowerButton.TEXT_SECONDARY;
+  private iconColor(): ResourceColor {
+    return this.isConnected ? this.activeColor() : Ui.textSecondary;
   }
 
   build() {
@@ -48,21 +41,19 @@ export struct PowerButton {
           center: [(this.buttonSize + 56) / 2, (this.buttonSize + 56) / 2],
           radius: (this.buttonSize + 56) / 2,
           colors: [
-            ['#00000000', 0.0],
-            [this.withAlpha(this.activeColor(), this.isConnected ? '40' : '1C'), 0.76],
-            ['#00000000', 1.0]
+            [Color.Transparent, 0.0],
+            [this.isConnected ? Ui.powerGlowActive : Ui.powerGlowIdle, 0.76],
+            [Color.Transparent, 1.0]
           ]
         })
       // 外层边框圆环（原版 Border.all 2px 主题色）
       Circle({ width: this.buttonSize, height: this.buttonSize })
         .fill(Color.Transparent)
-        .stroke(this.withAlpha(this.activeColor(), this.isConnected ? '9E' : '47'))
+        .stroke(this.isConnected ? Ui.powerRingActive : Ui.powerRingIdle)
         .strokeWidth(2)
       // 内层实心圆（连接 20% 主题色 / 未连接 #202B4B）
       Circle({ width: this.buttonSize * 0.85, height: this.buttonSize * 0.85 })
-        .fill(this.isConnected
-          ? this.withAlpha(this.activeColor(), '33')
-          : '#202B4B')
+        .fill(this.isConnected ? Ui.powerInnerActive : Ui.powerInnerIdle)
       // Power 图标
       if (this.isConnecting) {
         LoadingProgress()

@@ -1,5 +1,5 @@
 # =====================================================================
-# SSRVPN v5.0.4 one-shot: build -> sign release .app -> publish GitHub
+# SSRVPN v5.0.5 one-shot: build -> sign release .app -> publish GitHub
 # Run in a normal PowerShell window (Windows PowerShell 5.1 compatible):
 #   powershell -ExecutionPolicy Bypass -File build-sign-publish.ps1
 # It will prompt for your GitHub PAT (not stored anywhere).
@@ -8,7 +8,7 @@ $ErrorActionPreference = 'Stop'
 
 $repo   = 'C:\Users\xiaoli\Downloads\Agent-WorkerSpaces\SSRVPN-HarmonyOS'
 $proj   = "$repo\SSRVPN_HarmonyOS"
-$ver    = 'v5.0.4'
+$ver    = 'v5.0.5'
 $dl     = "$env:USERPROFILE\Downloads"
 
 $deveco = 'C:\Program Files\Huawei\DevEco Studio'
@@ -110,9 +110,12 @@ $msg = "v4.0.38-5.0.3: store compliance + UX + local YAML import`n`n" +
 "- hysteria2 upmbps/downmbps aliases (fixes server 404 auth when bandwidth params missing)`n" +
 "- power button: original blue ring + donut glow for connected state (radialGradient square bug fixed)`n" +
 "- startVpnExtensionAbility 15s race timeout (stuck spinner guard)`n" +
-"- local YAML import + allow renaming local:// subscriptions; version 5.0.4"
+"- local YAML import + allow renaming local:// subscriptions`n" +
+"- global node-name dedup (fix kernel startup abort on duplicate proxy names); version 5.0.5"
 $msg | git commit -F -
-git push "https://xiaoli8571:$token@github.com/xiaoli8571/SSRVPN_Harmony.git" main
+$authValue = :ToBase64String([Text.Encoding]::ASCII.GetBytes("xiaoli8571:$token"))
+git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $authValue" push origin main
+$authValue = $null
 if ($LASTEXITCODE -ne 0) { Pop-Location; throw 'git push FAILED' }
 Pop-Location
 

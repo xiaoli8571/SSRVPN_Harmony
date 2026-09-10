@@ -20,6 +20,8 @@ import { PowerButton } from '../components/PowerButton';
 import { AppLogger } from '../commons/utils/AppLogger';
 import { AppInfo } from '../commons/utils/AppInfo';
 import { display } from '@kit.ArkUI';
+import { window } from '@kit.ArkUI';
+import { ThemeService } from '../theme/ThemeService';
 
 const TAG = 'HomePage';
 
@@ -47,7 +49,7 @@ struct AboutDialog {
     }
     .padding(26)
     .borderRadius(20)
-    .backgroundColor('#E6242641')
+    .backgroundColor(Ui.surfaceTranslucent)
     .borderWidth(1)
     .borderColor(Ui.border)
   }
@@ -95,7 +97,7 @@ struct TutorialDialog {
     }
     .padding(26)
     .borderRadius(20)
-    .backgroundColor('#E6242641')
+    .backgroundColor(Ui.surfaceTranslucent)
     .borderWidth(1)
     .borderColor(Ui.border)
   }
@@ -122,6 +124,7 @@ struct HomePage {
   @State buttonPressed: boolean = false;
   /** 电源按钮直径: 按屏宽自适应(手机≈40% 宽, 平板封顶 210), 修复手机上比例失衡 */
   @State powerSize: number = 210;
+  @StorageLink('theme_revision') themeRevision: number = 0;
   /** 桌面长按快捷方式/服务卡片启动请求: EntryAbility 递增 seq + 写 mode, 这里消费 */
   @StorageLink('vpn_request_seq') @Watch('onVpnRequest') vpnRequestSeq: number = 0;
   private pageReady: boolean = false;
@@ -137,6 +140,14 @@ struct HomePage {
   private tutorialDialog: CustomDialogController = new CustomDialogController({
     builder: TutorialDialog({})
   });
+
+  private async toggleTheme(): Promise<void> {
+    await ThemeService.toggle();
+    const mainWindow = AppStorage.get<window.Window>('main_window');
+    if (mainWindow !== undefined) {
+      await ThemeService.syncSystemBars(mainWindow);
+    }
+  }
 
   onPageShow(): void {
     this.bootstrap();
@@ -263,7 +274,7 @@ struct HomePage {
     return '未连接';
   }
 
-  private statusColor(): string {
+  private statusColor(): ResourceColor {
     if (this.isConnecting) {
       return Ui.warning;
     }
@@ -276,7 +287,7 @@ struct HomePage {
     return Ui.textSecondary;
   }
 
-  private powerColor(): string {
+  private powerColor(): ResourceColor {
     if (this.errorMessage.length > 0) {
       return Ui.error;
     }
@@ -307,24 +318,29 @@ struct HomePage {
   }
 
   private async toggleConnection(): Promise<void> {
+    const context = getContext(this) as Context;
+    const node = this.selectedNode();
+    const nodeName = node === null ? '' : node.name;
     if (this.isConnecting) {
-      await this.orchestrator.disconnect();
-      FormStateSync.pushState(getContext(this) as Context, '未连接');
       return;
     }
     if (this.isConnected) {
+      await FormStateSync.publish(context, FormStateSync.disconnecting(nodeName));
       await this.orchestrator.disconnect();
-      FormStateSync.pushState(getContext(this) as Context, '未连接');
+      await FormStateSync.publish(context,
+        node === null ? FormStateSync.noNode() : FormStateSync.disconnected(nodeName));
       this.refreshPublicIp();
       return;
     }
-    const node = this.selectedNode();
     if (node === null) {
+      await FormStateSync.publish(context, FormStateSync.noNode());
       promptAction.showToast({ message: '暂无可用节点，请先在「订阅」页添加并刷新' });
       return;
     }
+    await FormStateSync.publish(context, FormStateSync.connecting(node.name));
     const ok = await this.orchestrator.connect(node, this.subs);
-    FormStateSync.pushState(getContext(this) as Context, ok ? '已连接' : '未连接');
+    await FormStateSync.publish(context,
+      ok ? FormStateSync.connected(node.name) : FormStateSync.failed(node.name));
     if (ok) {
       this.refreshPublicIp();
     }
@@ -345,7 +361,7 @@ struct HomePage {
       Column() {
         Scroll() {
           Column({ space: 0 }) {
-            // ── 头部：关于 | SSRVPN | 使用教程 ──
+            // ── 头部：关于 | SSRVPN | 使用教程 + 主题切换 ──
             Row() {
               Text('关于')
                 .fontSize(14).fontColor(Ui.textSecondary)
@@ -358,10 +374,23 @@ struct HomePage {
                 .fontColor(Ui.textPrimary)
                 .letterSpacing(0.4)
               Blank()
-              Text('使用教程')
-                .fontSize(14).fontColor(Ui.textSecondary)
-                .padding({ left: 4, right: 4 })
-                .onClick(() => this.tutorialDialog.open())
+              Row({ space: 4 }) {
+                Text('使用教程')
+                  .fontSize(14).fontColor(Ui.textSecondary)
+                  .padding({ left: 4, right: 4 })
+                  .onClick(() => this.tutorialDialog.open())
+                Button() {
+                  SymbolGlyph($r('sys.symbol.sun_max'))
+                    .fontSize(20)
+                    .fontColor([Ui.textSecondary])
+                }
+                .width(40)
+                .height(40)
+                .borderRadius(20)
+                .backgroundColor(Color.Transparent)
+                .accessibilityText('切换浅色或深色主题')
+                .onClick(() => this.toggleTheme())
+              }
             }
             .width('100%')
             .height(48)
@@ -377,9 +406,9 @@ struct HomePage {
             }
             .padding({ left: 14, right: 14, top: 7, bottom: 7 })
             .borderRadius(18)
-            .backgroundColor('#B8242641') // surface 72%
+            .backgroundColor(Ui.surfaceTranslucent)
             .borderWidth(1)
-            .borderColor(this.statusColor() === Ui.textSecondary ? '#2EA7AFC2' : '#2EFFFFFF')
+            .borderColor(Ui.border)
 
             Blank().height(28)
 
@@ -419,7 +448,7 @@ struct HomePage {
               .layoutWeight(1)
               .padding({ top: 12, bottom: 12 })
               .borderRadius(14)
-              .backgroundColor('#E0242641')
+              .backgroundColor(Ui.surfaceMuted)
               .borderWidth(1)
               .borderColor(Ui.border)
 
@@ -438,7 +467,7 @@ struct HomePage {
               .layoutWeight(1)
               .padding({ top: 12, bottom: 12 })
               .borderRadius(14)
-              .backgroundColor('#E0242641')
+              .backgroundColor(Ui.surfaceMuted)
               .borderWidth(1)
               .borderColor(Ui.border)
 
@@ -457,7 +486,7 @@ struct HomePage {
               .layoutWeight(1)
               .padding({ top: 12, bottom: 12 })
               .borderRadius(14)
-              .backgroundColor('#E0242641')
+              .backgroundColor(Ui.surfaceMuted)
               .borderWidth(1)
               .borderColor(Ui.border)
             }
@@ -514,7 +543,6 @@ struct HomePage {
         Column() {
           Blank()
           DiagnosticsSheet({
-            darkMode: true,
             diag: this.diagData,
             onRefresh: () => {
               this.refreshDiagnostics();
@@ -524,7 +552,7 @@ struct HomePage {
             .height('55%')
         }
         .width('100%').height('100%')
-        .backgroundColor('#99000000')
+        .backgroundColor(Ui.overlay)
         .onClick(() => { this.showDiagnostics = false; })
       }
     }
@@ -544,7 +572,7 @@ struct HomePage {
         .borderRadius(15)
         .backgroundColor(Ui.primary)
         .justifyContent(FlexAlign.Center)
-        .shadow({ radius: 18, color: '#47' + Ui.primary.substring(1), offsetY: 8 })
+        .shadow({ radius: 18, color: Ui.shadow, offsetY: 8 })
 
         Column({ space: 4 }) {
           Text('当前节点').fontSize(12).fontColor(Ui.textSecondary)
@@ -577,10 +605,10 @@ struct HomePage {
       .alignItems(VerticalAlign.Center)
       .padding({ left: 16, right: 16, top: 14, bottom: 14 })
       .borderRadius(22)
-      .backgroundColor('#E0242641')
+      .backgroundColor(Ui.surfaceMuted)
       .borderWidth(1)
       .borderColor(Ui.border)
-      .shadow({ radius: 28, color: '#38000000', offsetY: 14 })
+      .shadow({ radius: 28, color: Ui.shadow, offsetY: 14 })
     }
     .width('100%')
     .constraintSize({ maxWidth: 408 })
@@ -630,11 +658,10 @@ struct HomePage {
       .padding(5)
       .constraintSize({ minHeight: 56 })
       .borderRadius(24)
-      .backgroundColor('#F024263A')
+      .backgroundColor(Ui.navBackground)
       .borderWidth(1)
       .borderColor(Ui.border)
-      .shadow({ radius: 30, color: '#66000000', offsetY: 16 })
-      .shadow({ radius: 20, color: '#242F5BFF', offsetY: 5 })
+      .shadow({ radius: 30, color: Ui.shadow, offsetY: 16 })
 
       Text(`SSRVPN for HarmonyOS v${AppInfo.version()}`)
         .fontSize(10).fontColor(Ui.textTertiary)
@@ -657,7 +684,7 @@ struct HomePage {
     .constraintSize({ minWidth: 0 })
     .padding({ top: 6, bottom: 6 })
     .borderRadius(18)
-    .backgroundColor(selected ? '#29' + Ui.primary.substring(1) : Color.Transparent)
+    .backgroundColor(selected ? Ui.selectedBackground : Color.Transparent)
     .onClick(() => onTap())
   }
 }

@@ -9,8 +9,8 @@ export struct SurfaceCard {
   @Prop radius: number = Ui.cardRadius;
   @Prop paddingV: number = 20;
   @Prop paddingH: number = 20;
-  @Prop bgColor: string = '#E0242641'; // surface 88%
-  @Prop edgeColor: string = Ui.border;
+  @Prop bgColor: ResourceColor = Ui.surfaceMuted;
+  @Prop edgeColor: ResourceColor = Ui.border;
   @BuilderParam content: () => void = this.empty;
 
   @Builder
@@ -31,7 +31,7 @@ export struct SurfaceCard {
     .borderColor(this.edgeColor)
     .shadow({
       radius: 28,
-      color: '#38000000',
+      color: Ui.shadow,
       offsetX: 0,
       offsetY: 14
     })
