@@ -11,6 +11,10 @@ export class Ui {
   static readonly surfaceStrong: ResourceColor = $r('app.color.ui_surface_strong');
   static readonly surfaceTranslucent: ResourceColor = $r('app.color.ui_surface_translucent');
   static readonly surfaceMuted: ResourceColor = $r('app.color.ui_surface_muted');
+  static readonly glassHighlight: ResourceColor = $r('app.color.ui_glass_highlight');
+  static readonly glassHighlightSoft: ResourceColor = $r('app.color.ui_glass_highlight_soft');
+  static readonly glassEdge: ResourceColor = $r('app.color.ui_glass_edge');
+  static readonly glassGlow: ResourceColor = $r('app.color.ui_glass_glow');
   static readonly inputBackground: ResourceColor = $r('app.color.ui_input_background');
   static readonly primary: ResourceColor = $r('app.color.ui_primary');
   static readonly primaryBlue: ResourceColor = $r('app.color.ui_primary_blue');
@@ -43,6 +47,21 @@ export class Ui {
 
   static readonly pagePadding: number = 20;
   static readonly cardRadius: number = 24;
+  static readonly dialogRadius: number = 28;
+  static readonly controlRadius: number = 14;
+  static readonly glassBlurRadius: number = 28;
+  /** 全局液态玻璃光学参数，避免各页面出现不同的雾化、亮度和景深。 */
+  static readonly glassSaturation: number = 1.26;
+  static readonly glassBrightness: number = 1.06;
+  /** 次级卡片与浮层使用的轻量液态玻璃参数。 */
+  static readonly glassSaturationSoft: number = 1.20;
+  static readonly glassBrightnessSoft: number = 1.04;
+  static readonly glassControlBlurRadius: number = 18;
+  static readonly glassControlSaturation: number = 1.12;
+  static readonly glassControlBrightness: number = 1.03;
+  static readonly glassShadowRadius: number = 30;
+  static readonly glassShadowOffsetY: number = 14;
+  static readonly glassPressScale: number = 0.985;
   static readonly compactBreakpoint: number = 460;
   static readonly pageMaxWidth: number = 440;
   static readonly bottomNavMaxWidth: number = 380;

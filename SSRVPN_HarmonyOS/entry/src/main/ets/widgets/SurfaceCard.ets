@@ -27,13 +27,22 @@ export struct SurfaceCard {
     .padding({ top: this.paddingV, bottom: this.paddingV, left: this.paddingH, right: this.paddingH })
     .borderRadius(this.radius)
     .backgroundColor(this.bgColor)
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+      colorMode: ThemeColorMode.SYSTEM,
+      adaptiveColor: AdaptiveColor.DEFAULT
+    })
+    .backgroundEffect({
+      radius: Ui.glassBlurRadius,
+      saturation: Ui.glassSaturation,
+      brightness: Ui.glassBrightness
+    })
     .borderWidth(1)
-    .borderColor(this.edgeColor)
+    .borderColor(Ui.glassEdge)
     .shadow({
-      radius: 28,
+      radius: Ui.glassShadowRadius,
       color: Ui.shadow,
       offsetX: 0,
-      offsetY: 14
+      offsetY: Ui.glassShadowOffsetY
     })
   }
 }

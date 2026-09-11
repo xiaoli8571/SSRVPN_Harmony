@@ -170,7 +170,9 @@ export class ClashApiService {
     const req = http.createHttp();
     this.inflight.add(req);
     try {
-      const outerTimeoutMs = timeoutMs + 2000;
+      // API 位于本机，外层只需给 mihomo 返回结果留少量调度余量。
+      // 旧的额外 2 秒会让每个失效节点在内核超时后继续空等，放大批测长尾。
+      const outerTimeoutMs = timeoutMs + 350;
       const startedAt = Date.now();
       const resp = await req.request(
         `${this.baseUrl()}/proxies/${encodeURIComponent(nodeName)}/delay?url=${encodeURIComponent(testUrl)}&timeout=${timeoutMs}`, {
@@ -210,7 +212,7 @@ export class ClashApiService {
       }
       return -1;
     } catch (e) {
-      AppLogger.warn(TAG, `latency request error: innerTimeout=${timeoutMs} outerTimeout=${timeoutMs + 2000} `
+      AppLogger.warn(TAG, `latency request error: innerTimeout=${timeoutMs} outerTimeout=${timeoutMs + 350} `
         + `error=${this.errText(e)}`);
       return -1;
     } finally {

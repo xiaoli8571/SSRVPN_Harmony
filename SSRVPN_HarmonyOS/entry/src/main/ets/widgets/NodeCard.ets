@@ -3,7 +3,7 @@
  * 移植自 upstream: packages/ssrvpn_shared/lib/widgets/ssrvpn_node_selection_node_card.dart
  * 延迟着色规则：<200 绿 / <500 警告黄 / 失败 红，与 upstream 一致。
  */
-import { AppTheme, Palette } from '../theme/AppTheme';
+import { Ui, LatencyStyle } from '../theme/UiTokens';
 import { ProxyNode } from '../commons/models/ProxyNode';
 import { NodeCountryPolicy } from '../commons/services/PublicIpService';
 import { CountryFlagIcon } from './CountryFlagIcon';
@@ -16,10 +16,6 @@ export struct NodeCard {
   @Prop latencyMs: number = -2; // -2 未测试, -1 失败
   onSelect: (node: ProxyNode) => void = () => {};
 
-  private pal(): Palette {
-    return AppTheme.isDark(this.darkMode);
-  }
-
   private latencyText(): string {
     if (this.latencyMs === -2) {
       return '—';
@@ -30,20 +26,10 @@ export struct NodeCard {
     return `${this.latencyMs}ms`;
   }
 
-  private latencyColor(): string {
-    if (this.latencyMs === -2) {
-      return this.pal().textHint;
-    }
-    if (this.latencyMs === -1) {
-      return AppTheme.errorColor;
-    }
-    if (this.latencyMs < 200) {
-      return AppTheme.successColor;
-    }
-    if (this.latencyMs < 500) {
-      return AppTheme.warningColor;
-    }
-    return AppTheme.errorColor;
+  private latencyColor(): ResourceColor {
+    if (this.latencyMs === -2) return Ui.textTertiary;
+    if (this.latencyMs === -1) return Ui.error;
+    return LatencyStyle.color(this.latencyMs);
   }
 
   build() {
@@ -54,12 +40,12 @@ export struct NodeCard {
           Text(NodeCountryPolicy.displayName(this.node.name))
             .fontSize(15)
             .fontWeight(FontWeight.Medium)
-            .fontColor(this.selected ? AppTheme.primaryColor : this.pal().textPrimary)
+            .fontColor(this.selected ? Ui.primary : Ui.textPrimary)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
           Text(`${this.node.server}:${this.node.port}`)
             .fontSize(12)
-            .fontColor(this.pal().textHint)
+            .fontColor(Ui.textTertiary)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
         }
@@ -73,15 +59,27 @@ export struct NodeCard {
         if (this.selected) {
           Text('✓')
             .fontSize(16)
-            .fontColor(AppTheme.primaryColor)
+            .fontColor(Ui.primary)
         }
       }
       .width('100%')
       .padding(14)
-      .borderRadius(AppTheme.cardRadius)
-      .backgroundColor(this.selected ? this.pal().cardHover : this.pal().card)
+      .borderRadius(Ui.cardRadius)
+      .backgroundColor(this.selected ? Ui.surfaceStrong : Ui.surfaceTranslucent)
+      .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, { colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT })
+      .backgroundEffect({
+        radius: Ui.glassBlurRadius,
+        saturation: Ui.glassSaturationSoft,
+        brightness: Ui.glassBrightnessSoft
+      })
       .borderWidth(this.selected ? 1.5 : 1)
-      .borderColor(this.selected ? AppTheme.primaryColor : this.pal().border)
+      .borderColor(this.selected ? Ui.primary : Ui.glassEdge)
+      .shadow({
+        radius: this.selected ? 30 : 24,
+        color: this.selected ? Ui.glassGlow : Ui.shadow,
+        offsetX: 0,
+        offsetY: this.selected ? 10 : 12
+      })
       .onClick(() => {
         if (this.node !== null) {
           this.onSelect(this.node);

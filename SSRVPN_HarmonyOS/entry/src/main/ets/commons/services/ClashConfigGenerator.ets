@@ -118,8 +118,27 @@ export class ClashConfigGenerator {
         lines.push(`      - "${ClashConfigGenerator.escapeYaml(n.name)}"`);
       }
     }
+    if (settings.rulesEnabled && settings.hyperAdRulesEnabled) {
+      lines.push('');
+      lines.push('rule-providers:');
+      lines.push('  hyper-adrules:');
+      lines.push('    type: http');
+      lines.push('    behavior: domain');
+      lines.push('    format: mrs');
+      lines.push('    interval: 86400');
+      lines.push('    path: ./ruleset/hyper_adrules_ads.mrs');
+      lines.push('    url: "https://github.com/Lynricsy/HyperADRules/releases/latest/download/hyper_adrules_ads.mrs"');
+    }
     lines.push('');
     lines.push('rules:');
+    if (settings.rulesEnabled && settings.hyperAdRulesEnabled) {
+      lines.push('  - RULE-SET,hyper-adrules,REJECT');
+    }
+    if (settings.rulesEnabled) {
+      for (const customRule of ClashConfigGenerator.normalizeCustomRules(settings.customRules)) {
+        lines.push(`  - ${customRule}`);
+      }
+    }
     // 强制站点规则统一做域名规范化、格式验证和去重，避免规则/YAML 注入。
     const directSites = ClashConfigGenerator.normalizeDomains(settings.forceDirectSites);
     const proxySites = ClashConfigGenerator.normalizeDomains(settings.forceProxySites);
@@ -146,6 +165,32 @@ export class ClashConfigGenerator {
     // 不再影响兜底 —— 兜底永远是 PROXY, 否则 VPN 没有意义。
     lines.push('  - MATCH,PROXY');
     return lines.join('\n') + '\n';
+  }
+
+  static normalizeCustomRules(values: string[]): string[] {
+    const out: string[] = [];
+    const allowed: string[] = ['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'IP-CIDR', 'IP-CIDR6', 'GEOIP'];
+    for (const raw of values) {
+      const rule = raw.trim();
+      if (rule.length === 0 || rule.length > 512 || rule.includes('\n') || rule.includes('\r')) {
+        continue;
+      }
+      const parts = rule.split(',').map((v: string) => v.trim());
+      if ((parts.length !== 3 && parts.length !== 4) || !allowed.includes(parts[0])) {
+        continue;
+      }
+      if (parts[1].length === 0 || (parts[2] !== 'DIRECT' && parts[2] !== 'PROXY' && parts[2] !== 'REJECT')) {
+        continue;
+      }
+      if (parts.length === 4 && parts[3] !== 'no-resolve') {
+        continue;
+      }
+      const normalized = parts.join(',');
+      if (!out.includes(normalized)) {
+        out.push(normalized);
+      }
+    }
+    return out.slice(0, 500);
   }
 
   static proxyYamlLine(n: ProxyNode): string {

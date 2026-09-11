@@ -102,6 +102,11 @@ struct ToggleCard {
     .padding(14)
     .justifyContent(FlexAlign.SpaceBetween)
     .backgroundColor($r('app.color.form_background'))
+    // Form 卡片不支持 backgroundEffect / ThemeColorMode。
+    // 使用半透明语义颜色、玻璃描边和柔和阴影保留同一视觉语言。
+    .borderWidth(1)
+    .borderColor($r('app.color.ui_glass_edge'))
+    .shadow({ radius: 24, color: $r('app.color.ui_shadow'), offsetX: 0, offsetY: 10 })
     .borderRadius(16)
     .accessibilityDescription(this.accessibilityLabel)
   }

@@ -3,7 +3,7 @@
  * 移植自 upstream: packages/ssrvpn_shared/lib/widgets/ssrvpn_subscription_view.dart
  *                ssrvpn_subscription_connection_card.dart / ssrvpn_subscription_header.dart
  */
-import { AppTheme, Palette } from '../theme/AppTheme';
+import { Ui } from '../theme/UiTokens';
 import { Subscription } from '../commons/models/Subscription';
 
 @Component
@@ -14,10 +14,6 @@ export struct SubscriptionCard {
   onRefresh: (id: string) => void = () => {};
   onEdit: (id: string) => void = () => {};
   onDelete: (id: string) => void = () => {};
-
-  private pal(): Palette {
-    return AppTheme.isDark(this.darkMode);
-  }
 
   private subId(): string {
     return this.sub !== null ? this.sub.id : '';
@@ -30,7 +26,7 @@ export struct SubscriptionCard {
           Text(this.sub.name)
             .fontSize(16)
             .fontWeight(FontWeight.Bold)
-            .fontColor(this.pal().textPrimary)
+            .fontColor(Ui.textPrimary)
             .layoutWeight(1)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -38,7 +34,7 @@ export struct SubscriptionCard {
             Text('当前')
               .fontSize(11)
               .fontColor(Color.White)
-              .backgroundColor(AppTheme.primaryColor)
+              .backgroundColor(Ui.primaryBlueFill)
               .borderRadius(8)
               .padding({ left: 8, right: 8, top: 2, bottom: 2 })
           }
@@ -47,7 +43,7 @@ export struct SubscriptionCard {
 
         Text(this.sub.url)
           .fontSize(12)
-          .fontColor(this.pal().textHint)
+          .fontColor(Ui.textTertiary)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
@@ -55,21 +51,21 @@ export struct SubscriptionCard {
         Row() {
           Text(`节点 ${this.sub.nodeCount}`)
             .fontSize(13)
-            .fontColor(this.pal().textSecondary)
+            .fontColor(Ui.textSecondary)
           Blank()
           Text('刷新')
             .fontSize(13)
-            .fontColor(AppTheme.primaryColor)
+            .fontColor(Ui.primary)
             .onClick(() => this.onRefresh(this.subId()))
             .padding({ left: 12, right: 6 })
           Text('编辑')
             .fontSize(13)
-            .fontColor(AppTheme.primaryColor)
+            .fontColor(Ui.primary)
             .onClick(() => this.onEdit(this.subId()))
             .padding({ left: 6, right: 6 })
           Text('删除')
             .fontSize(13)
-            .fontColor(AppTheme.errorColor)
+            .fontColor(Ui.error)
             .onClick(() => this.onDelete(this.subId()))
             .padding({ left: 6, right: 12 })
         }
@@ -77,10 +73,22 @@ export struct SubscriptionCard {
       }
       .width('100%')
       .padding(16)
-      .borderRadius(AppTheme.cardRadius)
-      .backgroundColor(this.pal().card)
+      .borderRadius(Ui.cardRadius)
+      .backgroundColor(Ui.surfaceTranslucent)
+      .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, { colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT })
+      .backgroundEffect({
+        radius: Ui.glassBlurRadius,
+        saturation: Ui.glassSaturationSoft,
+        brightness: Ui.glassBrightnessSoft
+      })
       .borderWidth(1)
-      .borderColor(this.pal().border)
+      .borderColor(Ui.glassEdge)
+      .shadow({
+        radius: this.active ? 30 : 24,
+        color: this.active ? Ui.glassGlow : Ui.shadow,
+        offsetX: 0,
+        offsetY: this.active ? 10 : 12
+      })
     }
   }
 }

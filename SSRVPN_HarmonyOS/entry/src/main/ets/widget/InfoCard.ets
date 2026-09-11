@@ -162,6 +162,8 @@ struct InfoCard {
       .width('100%')
       .padding({ left: 10, right: 10, top: 7, bottom: 7 })
       .backgroundColor($r('app.color.form_panel_background'))
+      .borderWidth(1)
+      .borderColor($r('app.color.ui_glass_edge'))
       .borderRadius(14)
 
       Button(this.actionLabel)
@@ -184,6 +186,11 @@ struct InfoCard {
     .padding({ left: 14, right: 14, top: 10, bottom: 10 })
     .justifyContent(FlexAlign.Start)
     .backgroundColor($r('app.color.form_background'))
+    // Form 卡片不支持 backgroundEffect / ThemeColorMode。
+    // 使用半透明语义颜色、玻璃描边和柔和阴影保留同一视觉语言。
+    .borderWidth(1)
+    .borderColor($r('app.color.ui_glass_edge'))
+    .shadow({ radius: 24, color: $r('app.color.ui_shadow'), offsetX: 0, offsetY: 10 })
     .borderRadius(18)
     .accessibilityDescription(this.accessibilityLabel)
   }

@@ -109,12 +109,33 @@ struct NodeEditPage {
                   .onChange((v: string) => { this.rawImport = v; })
                   .height(88)
                   .borderRadius(14)
-                  .backgroundColor('#181B2A')
+                  .backgroundColor(Ui.surfaceTranslucent)
+                  .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+                    colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+                  })
+                  .backgroundEffect({
+                    radius: Ui.glassControlBlurRadius,
+                    saturation: Ui.glassControlSaturation,
+                    brightness: Ui.glassControlBrightness
+                  })
+                  .borderWidth(1)
+                  .borderColor(Ui.glassEdge)
                   .fontColor(Ui.textPrimary)
+                  .placeholderColor(Ui.textTertiary)
                 Button('解析并填充')
                   .width('100%')
                   .height(44)
-                  .backgroundColor(Ui.surfaceStrong)
+                  .backgroundColor(Ui.surfaceTranslucent)
+                  .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+                    colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+                  })
+                  .backgroundEffect({
+                    radius: Ui.glassControlBlurRadius,
+                    saturation: Ui.glassControlSaturation,
+                    brightness: Ui.glassControlBrightness
+                  })
+                  .borderWidth(1)
+                  .borderColor(Ui.glassEdge)
                   .fontColor(Ui.textViolet)
                   .borderRadius(12)
                   .onClick(() => this.importFromUri())
@@ -122,10 +143,16 @@ struct NodeEditPage {
               .width('100%')
               .padding(18)
               .borderRadius(22)
-              .backgroundColor('#E0242641')
+              .backgroundColor(Ui.surfaceTranslucent)
+              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, { colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT })
+              .backgroundEffect({
+                radius: Ui.glassBlurRadius,
+                saturation: Ui.glassSaturationSoft,
+                brightness: Ui.glassBrightnessSoft
+              })
               .borderWidth(1)
-              .borderColor(Ui.border)
-              .shadow({ radius: 28, color: '#38000000', offsetY: 14 })
+              .borderColor(Ui.glassEdge)
+              .shadow({ radius: 32, color: Ui.shadow, offsetY: 16 })
             }
 
             Column({ space: 12 }) {
@@ -133,40 +160,71 @@ struct NodeEditPage {
                 Text('节点信息').fontSize(13).fontColor(Ui.textTertiary)
                 TextInput({ placeholder: '节点名称', text: this.name })
                   .onChange((v: string) => { this.name = v; })
-                  .height(46).borderRadius(12).backgroundColor('#181B2A').fontColor(Ui.textPrimary)
+                  .height(46).borderRadius(12).backgroundColor(Ui.surfaceTranslucent)
+                  .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, { colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT })
+                  .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+                  .borderWidth(1).borderColor(Ui.glassEdge).fontColor(Ui.textPrimary).placeholderColor(Ui.textTertiary)
                 TextInput({ placeholder: '服务器地址', text: this.server })
                   .onChange((v: string) => { this.server = v; })
-                  .height(46).borderRadius(12).backgroundColor('#181B2A').fontColor(Ui.textPrimary)
+                  .height(46).borderRadius(12).backgroundColor(Ui.surfaceTranslucent)
+                  .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, { colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT })
+                  .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+                  .borderWidth(1).borderColor(Ui.glassEdge).fontColor(Ui.textPrimary).placeholderColor(Ui.textTertiary)
                 TextInput({ placeholder: '端口', text: this.port })
                   .onChange((v: string) => { this.port = v; })
-                  .height(46).borderRadius(12).backgroundColor('#181B2A').fontColor(Ui.textPrimary)
+                  .height(46).borderRadius(12).backgroundColor(Ui.surfaceTranslucent)
+                  .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, { colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT })
+                  .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+                  .borderWidth(1).borderColor(Ui.glassEdge).fontColor(Ui.textPrimary).placeholderColor(Ui.textTertiary)
                 TextInput({ placeholder: '密码', text: this.password })
                   .onChange((v: string) => { this.password = v; })
                   .type(InputType.Password)
-                  .height(46).borderRadius(12).backgroundColor('#181B2A').fontColor(Ui.textPrimary)
+                  .height(46).borderRadius(12).backgroundColor(Ui.surfaceTranslucent)
+                  .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, { colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT })
+                  .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+                  .borderWidth(1).borderColor(Ui.glassEdge).fontColor(Ui.textPrimary).placeholderColor(Ui.textTertiary)
                 Row({ space: 8 }) {
                   TextInput({ placeholder: '加密方法', text: this.method })
                     .onChange((v: string) => { this.method = v; })
-                    .height(46).borderRadius(12).backgroundColor('#181B2A')
-                    .fontColor(Ui.textPrimary).layoutWeight(1)
+                    .height(46).borderRadius(12).backgroundColor(Ui.surfaceTranslucent)
+                    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, { colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT })
+                    .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+                    .borderWidth(1).borderColor(Ui.glassEdge)
+                    .fontColor(Ui.textPrimary).placeholderColor(Ui.textTertiary).layoutWeight(1)
                   TextInput({ placeholder: '协议', text: this.protocol })
                     .onChange((v: string) => { this.protocol = v; })
-                    .height(46).borderRadius(12).backgroundColor('#181B2A')
-                    .fontColor(Ui.textPrimary).layoutWeight(1)
+                    .height(46).borderRadius(12).backgroundColor(Ui.surfaceTranslucent)
+                    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, { colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT })
+                    .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+                    .borderWidth(1).borderColor(Ui.glassEdge)
+                    .fontColor(Ui.textPrimary).placeholderColor(Ui.textTertiary).layoutWeight(1)
                   TextInput({ placeholder: '混淆', text: this.obfs })
                     .onChange((v: string) => { this.obfs = v; })
-                    .height(46).borderRadius(12).backgroundColor('#181B2A')
-                    .fontColor(Ui.textPrimary).layoutWeight(1)
+                    .height(46).borderRadius(12).backgroundColor(Ui.surfaceTranslucent)
+                    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, { colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT })
+                    .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+                    .borderWidth(1).borderColor(Ui.glassEdge)
+                    .fontColor(Ui.textPrimary).placeholderColor(Ui.textTertiary).layoutWeight(1)
                 }
                 .width('100%')
               }
               .width('100%')
               .padding(18)
               .borderRadius(22)
-              .backgroundColor('#E0242641')
+              .backgroundColor(Ui.surfaceTranslucent)
+              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, { colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT })
+              .backgroundEffect({
+                radius: Ui.glassBlurRadius,
+                saturation: Ui.glassSaturationSoft,
+                brightness: Ui.glassBrightnessSoft
+              })
               .borderWidth(1)
-              .borderColor(Ui.border)
-              .shadow({ radius: 28, color: '#38000000', offsetY: 14 })
+              .borderColor(Ui.glassEdge)
+              .shadow({
+                radius: Ui.glassShadowRadius,
+                color: Ui.shadow,
+                offsetY: Ui.glassShadowOffsetY
+              })
             }
           }
           .padding({ left: 18, right: 18, bottom: 40 })
@@ -180,5 +238,12 @@ struct NodeEditPage {
       .width('100%').height('100%')
     }
     .width('100%').height('100%')
+  }
+
+  pageTransition() {
+    PageTransitionEnter({ duration: 360, curve: Curve.EaseInOut })
+      .translate({ x: '4%', y: 0 }).opacity(0.68)
+    PageTransitionExit({ duration: 300, curve: Curve.EaseInOut })
+      .translate({ x: '2%', y: 0 }).opacity(0.72)
   }
 }

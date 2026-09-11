@@ -69,6 +69,9 @@ export class AppSettingsJson {
   healthCheckEnabled: boolean = true;
   /** 自检后最多执行的修复步数（0..3） */
   healthRepairMaxSteps: number = 2;
+  rulesEnabled: boolean = true;
+  hyperAdRulesEnabled: boolean = true;
+  customRules: string[] = [];
 }
 
 export class AppSettings {
@@ -108,6 +111,10 @@ export class AppSettings {
   healthCheckEnabled: boolean = true;
   /** 自检后最多执行的修复步数，范围 0..3，默认 2 */
   healthRepairMaxSteps: number = 2;
+  /** 是否启用规则功能；关闭后不生成广告规则和自定义规则。 */
+  rulesEnabled: boolean = true;
+  hyperAdRulesEnabled: boolean = true;
+  customRules: string[] = [];
 
   toJson(): AppSettingsJson {
     const j = new AppSettingsJson();
@@ -132,6 +139,9 @@ export class AppSettings {
     j.autoSelectMode = this.autoSelectMode;
     j.healthCheckEnabled = this.healthCheckEnabled;
     j.healthRepairMaxSteps = this.healthRepairMaxSteps;
+    j.rulesEnabled = this.rulesEnabled;
+    j.hyperAdRulesEnabled = this.hyperAdRulesEnabled;
+    j.customRules = this.customRules;
     return j;
   }
 
@@ -165,6 +175,10 @@ export class AppSettings {
     s.autoSelectMode = AutoSelectModes.normalize(j.autoSelectMode);
     s.healthCheckEnabled = typeof j.healthCheckEnabled === 'boolean' ? j.healthCheckEnabled : true;
     s.healthRepairMaxSteps = clampInt(j.healthRepairMaxSteps, 2, 0, 3);
+    s.rulesEnabled = typeof j.rulesEnabled === 'boolean' ? j.rulesEnabled : true;
+    s.hyperAdRulesEnabled = typeof j.hyperAdRulesEnabled === 'boolean' ? j.hyperAdRulesEnabled : true;
+    s.customRules = Array.isArray(j.customRules)
+      ? j.customRules.filter((v: string) => typeof v === 'string').slice(0, 500) : [];
     return s;
   }
 }

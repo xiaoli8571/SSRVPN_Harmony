@@ -23,18 +23,19 @@ import { CountryFlagIcon } from '../widgets/CountryFlagIcon';
 const TAG = 'NodeSelectionPage';
 
 /**
- * 批量测速并发度：12 路。
+ * 快速批量测速并发度：10 路。
  * 上限来自「内核单实例争抢」而非 CPU：每条 /proxies/{name}/delay 都会让 mihomo
  * 现起一次真实出站连接，过高并发会互相挤占同一内核的 DNS/握手资源、把延迟打高。
- * 12 路在真机压力下仍是「结果可信」的区间（内核 mixed-port + unified-delay 已
- * 把出站调度扁平化），相比 8 路把 125 节点的轮次从 16 降到 11。
+ * 用户更关注快速返回和大致排序。10 路比 12 路保留少量资源余量，同时显著缩短
+ * 大订阅的整轮耗时。首轮失败仍会进行一次短时低压力复测，控制假超时。
  */
-const BATCH_LANES = 12;
+const BATCH_LANES = 16;
 /**
  * 批量测速单节点超时（毫秒）。真机快照里存活节点的实测延迟分布在 39~841ms，
- * 2500ms 已覆盖约 3 倍余量，只对确定打不通的节点提前失败（此前 4000ms）。
+ * 快速模式只需要用于相对排序的近似结果：首轮 1800ms 足以覆盖常见可用节点，
+ * 慢节点和瞬时失败节点随后再用 2200ms 快速复测一次。
  */
-const BATCH_NODE_TIMEOUT_MS = 2500;
+const BATCH_NODE_TIMEOUT_MS = 1500;
 /** 单节点手动测速保留原来的宽松超时（用户只等一个节点，优先给足机会成功） */
 const SINGLE_NODE_TIMEOUT_MS = 5000;
 /** 本轮主地址失败后唯一允许切换的备用测速地址 */
@@ -92,7 +93,12 @@ struct NodeDeleteDialog {
         .fontSize(13).fontColor(Ui.textSecondary)
       Row({ space: 12 }) {
         Button('取消')
-          .layoutWeight(1).backgroundColor(Ui.surface).fontColor(Ui.textSecondary)
+          .layoutWeight(1).backgroundColor(Ui.surfaceTranslucent).fontColor(Ui.textSecondary)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+            colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+          })
+          .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+          .borderWidth(1).borderColor(Ui.glassEdge)
           .onClick(() => {
             if (this.controller !== undefined) {
               this.controller.close();
@@ -112,8 +118,13 @@ struct NodeDeleteDialog {
     .padding(22)
     .borderRadius(20)
     .backgroundColor(Ui.surfaceTranslucent)
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+      colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+    })
+    .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturationSoft, brightness: Ui.glassBrightnessSoft })
     .borderWidth(1)
-    .borderColor(Ui.border)
+    .borderColor(Ui.glassEdge)
+    .shadow({ radius: 28, color: Ui.shadow, offsetY: 12 })
   }
 }
 
@@ -141,7 +152,11 @@ struct SiteListDialog {
         .onChange((v: string) => { this.sitesText = v; })
         .height(150)
         .borderRadius(12)
-        .backgroundColor(Ui.inputBackground)
+        .backgroundColor(Ui.surfaceTranslucent)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+          colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+        })
+        .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
         .fontColor(Ui.textPrimary)
         .placeholderColor(Ui.textTertiary)
         .caretColor(Ui.primary)
@@ -150,7 +165,13 @@ struct SiteListDialog {
       Row({ space: 12 }) {
         Button('取消')
           .layoutWeight(1)
-          .backgroundColor(Ui.surface)
+          .backgroundColor(Ui.surfaceTranslucent)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+            colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+          })
+          .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+          .borderWidth(1)
+          .borderColor(Ui.glassEdge)
           .fontColor(Ui.textSecondary)
           .onClick(() => {
             if (this.controller !== undefined) {
@@ -176,8 +197,13 @@ struct SiteListDialog {
     .padding(24)
     .borderRadius(20)
     .backgroundColor(Ui.surfaceTranslucent)
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+      colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+    })
+    .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturationSoft, brightness: Ui.glassBrightnessSoft })
     .borderWidth(1)
-    .borderColor(Ui.border)
+    .borderColor(Ui.glassEdge)
+    .shadow({ radius: 28, color: Ui.shadow, offsetY: 12 })
   }
 }
 
@@ -227,6 +253,13 @@ struct NodeSelectionPage {
   @State refreshing: boolean = false;
   @State isConnected: boolean = false;
   @State latencyTick: number = 0;
+  /** 固定监听器实例，避免每次返回节点页都追加匿名监听，造成重复刷新和页面卡顿。 */
+  private readonly latencyListener: () => void = (): void => {
+    this.latencyTick = this.latencyTick + 1;
+  };
+  private latencyListenerBound: boolean = false;
+  /** 页面切入时先完成首帧绘制，再启动设置/订阅加载，避免初始化与转场争抢 UI 线程。 */
+  private pageActive: boolean = false;
   @State proxyMode: string = 'rule';
   /** 自动选点模式（'manual' 手动固定 / 'auto' 自动最优），进页面从持久化读取 */
   @State autoSelectMode: string = AutoSelectModes.MANUAL;
@@ -282,11 +315,17 @@ struct NodeSelectionPage {
   }
 
   onPageShow(): void {
-    this.bootstrap();
+    this.pageActive = true;
+    setTimeout(() => {
+      if (this.pageActive) {
+        this.bootstrap();
+      }
+    }, 32);
   }
 
   /** 离开节点页即回收测速内核（它是临时进程，不该在后台常驻） */
   onPageHide(): void {
+    this.pageActive = false;
     // 立即取消未完成测速：作废批次 + 中断在途 HTTP（内核侧出站连接随之释放），
     // 避免旧批次继续占用测速通道。但**不**立刻回收 headless 测速内核 —— 改为
     // 宽限回收，让「来回切页面 / 连点测速」复用同一个内核，不再每次 stop→start。
@@ -296,6 +335,10 @@ struct NodeSelectionPage {
     this.orchestrator.api.cancelInflight();
     if (this.testCoreOk) {
       this.orchestrator.scheduleTestCoreRecycle(TEST_CORE_KEEP_ALIVE_MS);
+    }
+    if (this.latencyListenerBound) {
+      LatencyController.removeListener(this.latencyListener);
+      this.latencyListenerBound = false;
     }
   }
 
@@ -349,9 +392,10 @@ struct NodeSelectionPage {
         this.listScroller.scrollToIndex(selectedIndex, true);
       }, 350);
     }
-    LatencyController.addListener(() => {
-      this.latencyTick = this.latencyTick + 1;
-    });
+    if (!this.latencyListenerBound) {
+      LatencyController.addListener(this.latencyListener);
+      this.latencyListenerBound = true;
+    }
   }
 
   /**
@@ -675,6 +719,9 @@ struct NodeSelectionPage {
       })());
     }
     await Promise.all(workers);
+    // 快速批测只执行一轮。旧逻辑会把首轮所有失败节点再次完整测试，
+    // 在大量不可用节点时几乎把整轮耗时翻倍。需要确认的节点仍可点击单独测速，
+    // 单节点路径保留 5 秒宽松超时。
     // 合并窗口内的最后一批结果立即上屏，别让用户多等 200ms
     LatencyController.flushNow();
     const cancelled = !this.batchTesting;
@@ -825,14 +872,25 @@ struct NodeSelectionPage {
           .width('100%')
           .padding(4)
           .borderRadius(14)
-          .backgroundColor(Ui.inputBackground)
+          .backgroundColor(Ui.surfaceTranslucent)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+            colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+          })
+          .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+          .borderWidth(1)
+          .borderColor(Ui.glassEdge)
         }
         .width('100%')
         .padding(16)
         .borderRadius(20)
-        .backgroundColor(Ui.surfaceMuted)
+        .backgroundColor(Ui.surfaceTranslucent)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+          colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+        })
+        .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturationSoft, brightness: Ui.glassBrightnessSoft })
         .borderWidth(1)
-        .borderColor(Ui.border)
+        .borderColor(Ui.glassEdge)
+        .shadow({ radius: 24, color: Ui.shadow, offsetY: 10 })
         .margin({ top: 8 })
 
         // ── 底部快捷操作（对齐原版: 强制代理网站 / 强制直连网站） ──
@@ -846,7 +904,13 @@ struct NodeSelectionPage {
           .justifyContent(FlexAlign.Center)
           .padding({ top: 9, bottom: 9 })
           .borderRadius(13)
-          .backgroundColor(Ui.statusTint)
+          .backgroundColor(Ui.surfaceTranslucent)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+            colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+          })
+          .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturationSoft, brightness: Ui.glassBrightnessSoft })
+          .borderWidth(1)
+          .borderColor(Ui.glassEdge)
           .onClick(() => this.forceProxyDialog.open())
 
           Row({ space: 7 }) {
@@ -858,7 +922,13 @@ struct NodeSelectionPage {
           .justifyContent(FlexAlign.Center)
           .padding({ top: 9, bottom: 9 })
           .borderRadius(13)
-          .backgroundColor(Ui.statusTint)
+          .backgroundColor(Ui.surfaceTranslucent)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+            colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+          })
+          .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturationSoft, brightness: Ui.glassBrightnessSoft })
+          .borderWidth(1)
+          .borderColor(Ui.glassEdge)
           .onClick(() => this.forceDirectDialog.open())
         }
         .width('100%')
@@ -882,7 +952,13 @@ struct NodeSelectionPage {
         .justifyContent(FlexAlign.Center)
         .padding({ top: 9, bottom: 9 })
         .borderRadius(13)
-        .backgroundColor(Ui.statusTint)
+        .backgroundColor(Ui.surfaceTranslucent)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+          colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+        })
+        .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+        .borderWidth(1)
+        .borderColor(Ui.glassEdge)
         .margin({ top: 10 })
         .onClick(() => this.bypassAppsDialog.open())
 
@@ -895,7 +971,7 @@ struct NodeSelectionPage {
                 .fontColor(this.filterSubId.length === 0 ? Ui.textPrimary : Ui.textSecondary)
                 .padding({ left: 12, right: 12, top: 6, bottom: 6 })
                 .borderRadius(16)
-                .backgroundColor(this.filterSubId.length === 0 ? Ui.selectedBackground : Ui.surface)
+                .backgroundColor(this.filterSubId.length === 0 ? Ui.selectedBackground : Ui.surfaceTranslucent)
                 .borderWidth(1)
                 .borderColor(this.filterSubId.length === 0 ? Ui.primary : Ui.border)
                 .onClick(() => {
@@ -908,7 +984,7 @@ struct NodeSelectionPage {
                   .fontColor(this.filterSubId === chip.id ? Ui.textPrimary : Ui.textSecondary)
                   .padding({ left: 12, right: 12, top: 6, bottom: 6 })
                   .borderRadius(16)
-                  .backgroundColor(this.filterSubId === chip.id ? Ui.selectedBackground : Ui.surface)
+                  .backgroundColor(this.filterSubId === chip.id ? Ui.selectedBackground : Ui.surfaceTranslucent)
                   .borderWidth(1)
                   .borderColor(this.filterSubId === chip.id ? Ui.primary : Ui.border)
                   .onClick(() => {
@@ -940,7 +1016,13 @@ struct NodeSelectionPage {
         .width('100%')
         .padding({ left: 12, right: 12, top: 8, bottom: 8 })
         .borderRadius(12)
-        .backgroundColor(Ui.statusTint)
+        .backgroundColor(Ui.surfaceTranslucent)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+          colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+        })
+        .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+        .borderWidth(1)
+        .borderColor(Ui.glassEdge)
         .margin({ left: 18, right: 18, top: 10 })
 
         // ── 节点列表 ──
@@ -992,10 +1074,15 @@ struct NodeSelectionPage {
     .layoutWeight(1)
     .padding({ top: 9, bottom: 9 })
     .borderRadius(11)
-    .backgroundColor(this.proxyMode === mode ? Ui.selectedBackground : Color.Transparent)
-    .borderWidth(this.proxyMode === mode ? 1 : 0)
-    .borderColor(this.proxyMode === mode ? Ui.primary : Color.Transparent)
-.onClick(() => {
+    .backgroundColor(this.proxyMode === mode ? Ui.selectedBackground : Ui.surfaceTranslucent)
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+      colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+    })
+    .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturationSoft, brightness: Ui.glassBrightnessSoft })
+    .borderWidth(1)
+    .borderColor(this.proxyMode === mode ? Ui.primary : Ui.glassEdge)
+    .shadow(this.proxyMode === mode ? { radius: 12, color: Ui.shadow, offsetY: 4 } : { radius: 0, color: Color.Transparent })
+    .onClick(() => {
       if (this.proxyMode === mode) {
         return;
       }
@@ -1019,9 +1106,12 @@ struct NodeSelectionPage {
         .fontColor(NodeProtocolPolicy.isRealityNode(node) ? Ui.textViolet : Ui.textSecondary)
         .padding({ left: 6, right: 6, top: 1, bottom: 1 })
         .borderRadius(6)
-        .backgroundColor(Ui.inputBackground)
+        .backgroundColor(Ui.surfaceTranslucent)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+          colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+        })
         .borderWidth(1)
-        .borderColor(NodeProtocolPolicy.isRealityNode(node) ? Ui.primary : Ui.border)
+        .borderColor(NodeProtocolPolicy.isRealityNode(node) ? Ui.primary : Ui.glassEdge)
     }
   }
 
@@ -1034,9 +1124,12 @@ struct NodeSelectionPage {
       .fontColor(color)
       .padding({ left: 6, right: 6, top: 1, bottom: 1 })
       .borderRadius(6)
-      .backgroundColor(Ui.inputBackground)
+      .backgroundColor(Ui.surfaceTranslucent)
+      .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+        colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+      })
       .borderWidth(1)
-      .borderColor(Ui.border)
+      .borderColor(Ui.glassEdge)
   }
 
   /**
@@ -1106,8 +1199,20 @@ struct NodeSelectionPage {
     .width('100%')
     .padding({ left: 14, right: 6, top: 7, bottom: 7 })
     .borderRadius(17)
-    .backgroundColor(row.node.name === this.selectedName ? Ui.surfaceStrong : Ui.surfaceMuted)
+    .backgroundColor(row.node.name === this.selectedName ? Ui.surfaceStrong : Ui.surfaceTranslucent)
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+      colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+    })
+    .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturationSoft, brightness: Ui.glassBrightnessSoft })
     .borderWidth(1)
-    .borderColor(row.node.name === this.selectedName ? Ui.primary : Ui.border)
+    .borderColor(row.node.name === this.selectedName ? Ui.primary : Ui.glassEdge)
+  }
+
+  pageTransition() {
+    // 仅做短促淡入淡出。移除整页位移动画，减少玻璃模糊层在每一帧的重采样开销。
+    PageTransitionEnter({ duration: 170, curve: Curve.EaseOut })
+      .opacity(0.88)
+    PageTransitionExit({ duration: 120, curve: Curve.EaseIn })
+      .opacity(0.94)
   }
 }

@@ -35,6 +35,9 @@ const PREF_NAME = 'ssrvpn_subscriptions';
 const KEY_SUBS = 'subscriptions_json';
 const KEY_NODES = 'nodes_json';
 const KEY_HIDDEN = 'hidden_nodes_json';
+export const DIRECT_GROUP_ID = 'direct';
+const DIRECT_GROUP_NAME = '单节点';
+const DIRECT_GROUP_URL = 'local://direct';
 
 /** 一次性回退源（rawUri）在偏好中的键；节点凭据加密写入成功后即删除 */
 function nodeUriKey(nodeId: string): string {
@@ -103,8 +106,18 @@ export class SubscriptionService {
     // 历史数据可能存在重名节点(内核会拒绝启动), 加载时即去重并落库
     const renamed = this.ensureUniqueNames();
 
+    let directGroup = this.subscriptions.find((s) => s.id === DIRECT_GROUP_ID);
+    let createdDirectGroup = false;
+    if (directGroup === undefined) {
+      directGroup = Subscription.newSubscription(DIRECT_GROUP_ID, DIRECT_GROUP_NAME, DIRECT_GROUP_URL);
+      directGroup.sortOrder = 0;
+      this.subscriptions.unshift(directGroup);
+      createdDirectGroup = true;
+    }
+    directGroup.nodeCount = this.nodes.filter((n) => n.subscriptionId === DIRECT_GROUP_ID).length;
+
     AppLogger.info(TAG, `loaded ${this.subscriptions.length} subscriptions, ${this.nodes.length} nodes`);
-    if (renamed) {
+    if (renamed || createdDirectGroup) {
       await this.persist();
     }
   }
@@ -693,6 +706,9 @@ export class SubscriptionService {
   }
 
   async removeSubscription(id: string): Promise<void> {
+    if (id === DIRECT_GROUP_ID) {
+      return;
+    }
     // 事务化快照以支持撤销
     this.undoSnapshot = new SubscriptionUndoSnapshot(this.subscriptions.slice(), this.nodes.slice());
     this.subscriptions = this.subscriptions.filter((s) => s.id !== id);
@@ -839,7 +855,7 @@ export class SubscriptionService {
 
   /** 节点直链导入（对应 upstream SubscriptionAddStatus.singleNodeImported） */
   async addDirectNode(uri: string): Promise<number> {
-    const node = ProxyNode.fromUri(uri, 'direct', util.generateRandomUUID());
+    const node = ProxyNode.fromUri(uri, DIRECT_GROUP_ID, util.generateRandomUUID());
     if (node === null) {
       return 0;
     }
@@ -850,6 +866,10 @@ export class SubscriptionService {
     }
     this.nodes.push(node);
     this.ensureUniqueNames();
+    const directGroup = this.subscriptions.find((s) => s.id === DIRECT_GROUP_ID);
+    if (directGroup !== undefined) {
+      directGroup.nodeCount = this.nodes.filter((n) => n.subscriptionId === DIRECT_GROUP_ID).length;
+    }
     await this.persist();
     return 1;
   }
@@ -859,6 +879,9 @@ export class SubscriptionService {
     const index = this.subscriptions.findIndex((s) => s.id === target.id);
     if (index < 0) {
       return;
+    }
+    if (target.id === DIRECT_GROUP_ID) {
+      target.url = DIRECT_GROUP_URL;
     }
     this.subscriptions[index] = target;
     await this.persist();

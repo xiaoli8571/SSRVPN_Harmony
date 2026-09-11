@@ -12,7 +12,7 @@ import { picker, fileIo as fs } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 import scanBarcode from '@hms.core.scan.scanBarcode';
 import { Ui } from '../theme/UiTokens';
-import { SubscriptionService } from '../commons/services/SubscriptionService';
+import { SubscriptionService, DIRECT_GROUP_ID } from '../commons/services/SubscriptionService';
 import { Subscription, SubscriptionRefreshStatus } from '../commons/models/Subscription';
 import { SubscriptionFetchPolicy } from '../commons/services/SubscriptionFetchPolicy';
 import { SettingsService } from '../commons/services/SettingsService';
@@ -53,7 +53,13 @@ struct DeleteConfirmDialog {
       Row({ space: 12 }) {
         Button('取消')
           .layoutWeight(1)
-          .backgroundColor(Ui.surface)
+          .backgroundColor(Ui.surfaceTranslucent)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+            colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+          })
+          .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+          .borderWidth(1)
+          .borderColor(Ui.glassEdge)
           .fontColor(Ui.textSecondary)
           .onClick(() => {
             if (this.controller !== undefined) {
@@ -75,9 +81,14 @@ struct DeleteConfirmDialog {
     }
     .padding(24)
     .borderRadius(20)
-    .backgroundColor(Ui.surfaceStrong)
+    .backgroundColor(Ui.surfaceTranslucent)
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+      colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+    })
+    .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturation, brightness: Ui.glassBrightness })
     .borderWidth(1)
-    .borderColor(Ui.border)
+    .borderColor(Ui.glassEdge)
+    .shadow({ radius: 28, color: Ui.shadow, offsetY: 14 })
   }
 }
 
@@ -102,19 +113,37 @@ struct EditSubscriptionDialog {
       TextInput({ placeholder: '订阅名称', text: this.editName })
         .onChange((v: string) => { this.editName = v; })
         .height(46).borderRadius(12)
-        .backgroundColor(Ui.inputBackground)
+        .backgroundColor(Ui.surfaceTranslucent)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+          colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+        })
+        .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+        .borderWidth(1)
+        .borderColor(Ui.glassEdge)
         .fontColor(Ui.textPrimary)
         .placeholderColor(Ui.textTertiary)
       TextInput({ placeholder: '订阅链接', text: this.editUrl })
         .onChange((v: string) => { this.editUrl = v; })
         .height(46).borderRadius(12)
-        .backgroundColor(Ui.inputBackground)
+        .backgroundColor(Ui.surfaceTranslucent)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+          colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+        })
+        .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+        .borderWidth(1)
+        .borderColor(Ui.glassEdge)
         .fontColor(Ui.textPrimary)
         .placeholderColor(Ui.textTertiary)
       Row({ space: 12 }) {
         Button('取消')
           .layoutWeight(1)
-          .backgroundColor(Ui.surface)
+          .backgroundColor(Ui.surfaceTranslucent)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+            colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+          })
+          .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+          .borderWidth(1)
+          .borderColor(Ui.glassEdge)
           .fontColor(Ui.textSecondary)
           .onClick(() => {
             if (this.controller !== undefined) {
@@ -136,9 +165,14 @@ struct EditSubscriptionDialog {
     }
     .padding(24)
     .borderRadius(20)
-    .backgroundColor(Ui.surfaceStrong)
+    .backgroundColor(Ui.surfaceTranslucent)
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+      colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+    })
+    .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturation, brightness: Ui.glassBrightness })
     .borderWidth(1)
-    .borderColor(Ui.borderStrong)
+    .borderColor(Ui.glassEdge)
+    .shadow({ radius: 28, color: Ui.shadow, offsetY: 14 })
   }
 }
 
@@ -154,14 +188,29 @@ struct AddSubscriptionDialog {
       Text('URL添加').fontSize(18).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
       TextInput({ placeholder: '订阅名称（可选，留空自动解析）', text: this.subscriptionName })
         .onChange((v: string) => { this.subscriptionName = v; })
-        .height(46).borderRadius(12).backgroundColor(Ui.inputBackground)
+        .height(46).borderRadius(12).backgroundColor(Ui.surfaceTranslucent)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+          colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+        })
+        .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+        .borderWidth(1).borderColor(Ui.glassEdge)
         .fontColor(Ui.textPrimary).placeholderColor(Ui.textTertiary)
       TextInput({ placeholder: '订阅链接', text: this.subscriptionUrl })
         .onChange((v: string) => { this.subscriptionUrl = v; })
-        .height(46).borderRadius(12).backgroundColor(Ui.inputBackground)
+        .height(46).borderRadius(12).backgroundColor(Ui.surfaceTranslucent)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+          colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+        })
+        .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+        .borderWidth(1).borderColor(Ui.glassEdge)
         .fontColor(Ui.textPrimary).placeholderColor(Ui.textTertiary)
       Row({ space: 12 }) {
-        Button('取消').layoutWeight(1).backgroundColor(Ui.surface).fontColor(Ui.textSecondary)
+        Button('取消').layoutWeight(1).backgroundColor(Ui.surfaceTranslucent).fontColor(Ui.textSecondary)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+            colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+          })
+          .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+          .borderWidth(1).borderColor(Ui.glassEdge)
           .onClick(() => { if (this.controller !== undefined) this.controller.close(); })
         Button('添加').layoutWeight(1).backgroundColor(Ui.primaryBlueFill).fontColor(Color.White)
           .onClick(() => {
@@ -169,8 +218,13 @@ struct AddSubscriptionDialog {
             this.onConfirm(this.subscriptionName, this.subscriptionUrl);
           })
       }.width('100%')
-    }.padding(24).borderRadius(20).backgroundColor(Ui.surfaceStrong)
-      .borderWidth(1).borderColor(Ui.borderStrong)
+    }.padding(24).borderRadius(20).backgroundColor(Ui.surfaceTranslucent)
+      .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+        colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+      })
+      .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturation, brightness: Ui.glassBrightness })
+      .borderWidth(1).borderColor(Ui.glassEdge)
+      .shadow({ radius: 28, color: Ui.shadow, offsetY: 14 })
   }
 }
 
@@ -278,7 +332,13 @@ struct DiagnosticsLogDialog {
             .alignItems(VerticalAlign.Top)
             .padding(12)
             .borderRadius(12)
-            .backgroundColor(Ui.surfaceMuted)
+            .backgroundColor(Ui.surfaceTranslucent)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+              colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+            })
+            .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+            .borderWidth(1)
+            .borderColor(Ui.glassEdge)
           }, (c: DiagCheck, idx: number) => `${idx}-${c.tone}-${c.summary}-${this.runLogTick}`)
 
           // 最近运行记录（对齐 upstream ExpansionTile: 有错误时默认展开）
@@ -319,7 +379,13 @@ struct DiagnosticsLogDialog {
               .width('100%')
               .padding(10)
               .borderRadius(10)
-              .backgroundColor(Ui.surfaceMuted)
+              .backgroundColor(Ui.surfaceTranslucent)
+              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+                colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+              })
+              .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+              .borderWidth(1)
+              .borderColor(Ui.glassEdge)
             }, (e: ReadableLog, idx: number) => `r${idx}-${this.runLogTick}`)
           }
 
@@ -348,7 +414,13 @@ struct DiagnosticsLogDialog {
               .width('100%')
               .padding(10)
               .borderRadius(10)
-              .backgroundColor(Ui.inputBackground)
+              .backgroundColor(Ui.surfaceTranslucent)
+              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+                colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+              })
+              .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+              .borderWidth(1)
+              .borderColor(Ui.glassEdge)
               .copyOption(CopyOptions.LocalDevice)
           }
         }
@@ -380,9 +452,14 @@ struct DiagnosticsLogDialog {
     .height('62%')
     .padding(18)
     .borderRadius(16)
-    .backgroundColor(Ui.surfaceStrong)
+    .backgroundColor(Ui.surfaceTranslucent)
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+      colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+    })
+    .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturationSoft, brightness: Ui.glassBrightnessSoft })
     .borderWidth(1)
-    .borderColor(Ui.borderStrong)
+    .borderColor(Ui.glassEdge)
+    .shadow({ radius: 30, color: Ui.shadow, offsetY: 14 })
   }
 
   private checkIcon(tone: string): string {
@@ -543,12 +620,17 @@ struct DiagnosticsLogDialog {
 @Entry
 @Component
 struct SubscriptionPage {
+  @State viewportWidth: number = 0;
+  @State viewportHeight: number = 0;
+  @State fabX: number = -1;
+  @State fabY: number = -1;
   @State subs: Subscription[] = [];
   @State inputUrl: string = '';
   @State inputName: string = '';
   @State showAddMenu: boolean = false;
   @State isAdding: boolean = false;
   @State isRefreshing: boolean = false;
+  @State refreshingSubscriptionIds: string[] = [];
   @State isImporting: boolean = false;
   @State isScanning: boolean = false;
   @State refreshMessage: string = '';
@@ -558,6 +640,8 @@ struct SubscriptionPage {
   @State showUndoBanner: boolean = false;
   private service: SubscriptionService = new SubscriptionService();
   private settings: AppSettings = new AppSettings();
+  private fabDragStartX: number = 0;
+  private fabDragStartY: number = 0;
   private deleteDialog: CustomDialogController = new CustomDialogController({
     builder: DeleteConfirmDialog({
       onConfirm: () => {
@@ -599,6 +683,9 @@ struct SubscriptionPage {
     await SettingsService.init(getContext(this) as Context);
     await this.service.init(getContext(this) as Context);
     this.settings = await SettingsService.load();
+    const fabPosition = await SettingsService.loadSubscriptionFabPosition();
+    this.fabX = fabPosition[0];
+    this.fabY = fabPosition[1];
     this.reload();
   }
 
@@ -784,8 +871,30 @@ struct SubscriptionPage {
     }
   }
 
+  private isRefreshingSubscription(id: string): boolean {
+    return this.refreshingSubscriptionIds.includes(id);
+  }
+
+  private async refreshOne(sub: Subscription): Promise<void> {
+    if (sub.id === DIRECT_GROUP_ID || this.isRefreshing || this.isRefreshingSubscription(sub.id)) {
+      return;
+    }
+    this.refreshingSubscriptionIds = this.refreshingSubscriptionIds.concat([sub.id]);
+    try {
+      const result = await this.service.refreshSubscription(sub.id);
+      this.reload();
+      const message = result.status === SubscriptionRefreshStatus.OK
+        ? `${sub.name} 刷新成功，共 ${result.nodeCount} 个节点`
+        : `${sub.name} 刷新失败：${result.message.length > 0 ? result.message : result.status}`;
+      this.showError(message);
+    } finally {
+      this.refreshingSubscriptionIds = this.refreshingSubscriptionIds.filter((id: string) => id !== sub.id);
+    }
+  }
+
   /** 全部刷新（对应 SubscriptionScreenController.refreshAll） */
-  private async refreshAll(): Promise<void> {    if (this.isAdding || this.isRefreshing) {
+  private async refreshAll(): Promise<void> {
+    if (this.isAdding || this.isRefreshing || this.refreshingSubscriptionIds.length > 0) {
       return;
     }
     this.isRefreshing = true;
@@ -794,7 +903,11 @@ struct SubscriptionPage {
     let fail = 0;
     let total = 0;
     const failReasons: string[] = [];
-    for (const s of this.subs) {
+    for (const s of this.subs.filter((item: Subscription) => item.id !== DIRECT_GROUP_ID)) {
+      if (!this.isRefreshing) {
+        break;
+      }
+      this.refreshingSubscriptionIds = [s.id];
       const r = await this.service.refreshSubscription(s.id);
       if (r.status === SubscriptionRefreshStatus.OK) {
         ok = ok + 1;
@@ -807,6 +920,7 @@ struct SubscriptionPage {
       }
       this.reload();
     }
+    this.refreshingSubscriptionIds = [];
     this.isRefreshing = false;
     if (fail === 0) {
       this.refreshMessageColor = Ui.success;
@@ -822,6 +936,10 @@ struct SubscriptionPage {
   }
 
   private async doDelete(id: string): Promise<void> {
+    if (id === DIRECT_GROUP_ID) {
+      this.showError('单节点分组为常驻分组，不能删除');
+      return;
+    }
     await this.service.removeSubscription(id);
     this.reload();
     // 撤销条（对应 upstream SnackBar action）：5 秒内可撤销删除
@@ -854,22 +972,24 @@ struct SubscriptionPage {
       this.showError('订阅名称不能为空');
       return;
     }
-    if (url.trim().length === 0) {
+    if (target.id !== DIRECT_GROUP_ID && url.trim().length === 0) {
       this.showError('订阅链接不能为空');
       return;
     }
     // 本地 YAML 导入的订阅（local:// 源）允许改名；http/https 走完整 URL 校验
-    if (!url.trim().startsWith('local://') && !SubscriptionFetchPolicy.isValidSubscriptionUrl(url.trim())) {
+    if (target.id !== DIRECT_GROUP_ID && !url.trim().startsWith('local://') && !SubscriptionFetchPolicy.isValidSubscriptionUrl(url.trim())) {
       this.showError('请输入有效的订阅链接');
       return;
     }
-    const dupe = this.subs.find((s) => s.url === url.trim() && s.id !== target.id);
+    const dupe = target.id === DIRECT_GROUP_ID ? undefined : this.subs.find((s) => s.url === url.trim() && s.id !== target.id);
     if (dupe !== undefined) {
       this.showError('该订阅链接已存在');
       return;
     }
     target.name = name.trim();
-    target.url = url.trim();
+    if (target.id !== DIRECT_GROUP_ID) {
+      target.url = url.trim();
+    }
     await this.service.updateSubscription(target);
     this.reload();
     this.editTarget = null;
@@ -902,6 +1022,32 @@ struct SubscriptionPage {
 
   private maskedUrl(url: string): string {
     return SubscriptionFetchPolicy.redactUrl(url);
+  }
+
+  /**
+   * 手机端保留 24vp 右边距；平板/横屏时把悬浮按钮收回到居中的内容栏边缘，
+   * 避免按钮漂到屏幕最右侧。
+   */
+  private floatingActionRight(): number {
+    if (this.viewportWidth <= Ui.compactBreakpoint) {
+      return 24;
+    }
+    return Math.max(24, (this.viewportWidth - Ui.pageMaxWidth) / 2 + 18);
+  }
+
+  private currentFabX(): number {
+    if (this.fabX >= 0) return this.fabX;
+    return Math.max(16, this.viewportWidth - this.floatingActionRight() - 58);
+  }
+
+  private currentFabY(): number {
+    if (this.fabY >= 0) return this.fabY;
+    return Math.max(16, this.viewportHeight - 162);
+  }
+
+  private setFabPosition(x: number, y: number): void {
+    this.fabX = Math.max(12, Math.min(x, Math.max(12, this.viewportWidth - 70)));
+    this.fabY = Math.max(12, Math.min(y, Math.max(12, this.viewportHeight - 112)));
   }
 
   private formatBytes(bytes: number): string {
@@ -962,7 +1108,12 @@ struct SubscriptionPage {
                   .fontColor(Ui.textBlue)
                   .padding({ left: 9, right: 9, top: 3, bottom: 3 })
                   .borderRadius(10)
-                  .backgroundColor(Ui.statusTint)
+                  .backgroundColor(Ui.surfaceTranslucent)
+                  .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+                    colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+                  })
+                  .borderWidth(1)
+                  .borderColor(Ui.glassEdge)
                   .margin({ left: 9 })
                 Blank()
                 Text(this.isRefreshing ? '取消刷新' : '全部刷新')
@@ -986,7 +1137,10 @@ struct SubscriptionPage {
                   .width('100%')
                   .padding(12)
                   .borderRadius(14)
-                  .backgroundColor(Ui.statusTint)
+                  .backgroundColor(Ui.surfaceTranslucent)
+                  .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+                    colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+                  })
                   .borderWidth(1)
                   .borderColor(this.refreshMessageColor)
               }
@@ -1003,9 +1157,14 @@ struct SubscriptionPage {
                 .width('100%')
                 .padding({ left: 14, right: 14, top: 10, bottom: 10 })
                 .borderRadius(14)
-                .backgroundColor(Ui.surface)
+                .backgroundColor(Ui.surfaceTranslucent)
+                .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+                  colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+                })
+                .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturationSoft, brightness: Ui.glassBrightnessSoft })
                 .borderWidth(1)
-                .borderColor(Ui.border)
+                .borderColor(Ui.glassEdge)
+                .shadow({ radius: 16, color: Ui.shadow, offsetY: 6 })
               }
 
               Blank().height(14)
@@ -1039,7 +1198,7 @@ struct SubscriptionPage {
                           .fontColor(Ui.textPrimary)
                           .maxLines(1)
                           .textOverflow({ overflow: TextOverflow.Ellipsis })
-                        Text(this.maskedUrl(sub.url))
+                        Text(sub.id === DIRECT_GROUP_ID ? '手动导入的单节点' : this.maskedUrl(sub.url))
                           .fontSize(12).fontColor(Ui.textTertiary)
                           .maxLines(1)
                           .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -1051,13 +1210,20 @@ struct SubscriptionPage {
                         .fontSize(18).fontColor(Ui.textSecondary)
                         .padding(6)
                         .onClick(() => this.openEdit(sub))
-                      Text('🗑')
-                        .fontSize(18).fontColor(Ui.textError)
-                        .padding(6)
-                        .onClick(() => {
-                          this.deleteTargetId = sub.id;
-                          this.deleteDialog.open();
-                        })
+                      if (sub.id !== DIRECT_GROUP_ID) {
+                        Text(this.isRefreshingSubscription(sub.id) ? '刷新中' : '↻')
+                          .fontSize(this.isRefreshingSubscription(sub.id) ? 11 : 20)
+                          .fontColor(Ui.textBlue)
+                          .padding(6)
+                          .onClick(() => this.refreshOne(sub))
+                        Text('🗑')
+                          .fontSize(18).fontColor(Ui.textError)
+                          .padding(6)
+                          .onClick(() => {
+                            this.deleteTargetId = sub.id;
+                            this.deleteDialog.open();
+                          })
+                      }
                     }
                     .width('100%')
                     .alignItems(VerticalAlign.Center)
@@ -1093,8 +1259,12 @@ struct SubscriptionPage {
                   .padding(18)
                   .borderRadius(22)
                   .backgroundColor(Ui.surfaceTranslucent)
+                  .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+                    colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+                  })
+                  .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturationSoft, brightness: Ui.glassBrightnessSoft })
                   .borderWidth(1)
-                  .borderColor(Ui.border)
+                  .borderColor(Ui.glassEdge)
                   .shadow({ radius: 28, color: Ui.shadow, offsetY: 14 })
                   .margin({ bottom: 12 })
                   .gesture(LongPressGesture().onAction(() => this.openEdit(sub)))
@@ -1118,25 +1288,64 @@ struct SubscriptionPage {
 
       if (this.showAddMenu) {
         Column({ space: 8 }) {
-          Button('URL添加').width(150).backgroundColor(Ui.surface).fontColor(Ui.textPrimary)
+          Button('URL添加').width(150).backgroundColor(Ui.surfaceTranslucent).fontColor(Ui.textPrimary)
+            .borderWidth(1).borderColor(Ui.glassEdge)
             .onClick(() => { this.showAddMenu = false; this.addDialog.open(); })
-          Button('二维码添加').width(150).backgroundColor(Ui.surface).fontColor(Ui.textPrimary)
+          Button('二维码添加').width(150).backgroundColor(Ui.surfaceTranslucent).fontColor(Ui.textPrimary)
+            .borderWidth(1).borderColor(Ui.glassEdge)
             .onClick(() => { this.showAddMenu = false; this.importSubscriptionFromQr(); })
-          Button('导入本地文件').width(150).backgroundColor(Ui.surface).fontColor(Ui.textPrimary)
+          Button('导入本地文件').width(150).backgroundColor(Ui.surfaceTranslucent).fontColor(Ui.textPrimary)
+            .borderWidth(1).borderColor(Ui.glassEdge)
             .onClick(() => { this.showAddMenu = false; this.importYamlFile(); })
         }
-        .padding(10).borderRadius(18).backgroundColor(Ui.surfaceStrong)
-        .position({ right: 24, bottom: 124 })
+        .padding(10).borderRadius(18).backgroundColor(Ui.surfaceTranslucent)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+          colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+        })
+        .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturationSoft, brightness: Ui.glassBrightnessSoft })
+        .borderWidth(1).borderColor(Ui.glassEdge)
+        .position({ x: Math.max(12, this.currentFabX() - 102), y: Math.max(12, this.currentFabY() - 174) })
         .shadow({ radius: 24, color: Ui.shadow, offsetY: 10 })
       }
       Button('+')
         .width(58).height(58).fontSize(32).fontWeight(FontWeight.Bold)
-        .fontColor(Color.White).backgroundColor(Ui.accent).borderRadius(29)
-        .position({ right: 24, bottom: 58 })
+        .fontColor(Ui.textPrimary).backgroundColor(Ui.surfaceTranslucent).borderRadius(29)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+          colorMode: ThemeColorMode.SYSTEM,
+          adaptiveColor: AdaptiveColor.DEFAULT
+        })
+        .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturation, brightness: Ui.glassBrightness })
+        .borderWidth(1).borderColor(Ui.glassEdge)
+        .position({ x: this.currentFabX(), y: this.currentFabY() })
         .shadow({ radius: 22, color: Ui.shadow, offsetY: 10 })
         .onClick(() => { this.showAddMenu = !this.showAddMenu; })
+        .gesture(PanGesture({ direction: PanDirection.All, distance: 4 })
+          .onActionStart(() => {
+            this.fabDragStartX = this.currentFabX();
+            this.fabDragStartY = this.currentFabY();
+            this.showAddMenu = false;
+          })
+          .onActionUpdate((event: GestureEvent) => {
+            this.setFabPosition(this.fabDragStartX + event.offsetX, this.fabDragStartY + event.offsetY);
+          })
+          .onActionEnd(() => {
+            SettingsService.saveSubscriptionFabPosition(this.fabX, this.fabY);
+          }))
     }
     .width('100%').height('100%')
+    .onAreaChange((_oldValue: Area, newValue: Area) => {
+      const width = Number(newValue.width);
+      const height = Number(newValue.height);
+      if (!Number.isNaN(width) && width > 0) {
+        this.viewportWidth = width;
+      }
+      if (!Number.isNaN(height) && height > 0) {
+        this.viewportHeight = height;
+        if (this.fabX >= 0 || this.fabY >= 0) {
+          this.setFabPosition(this.currentFabX(), this.currentFabY());
+        }
+      }
+    })
   }
 
   /** 浮动底部导航（对齐 SsrvpnBottomNavigation; 本页固定选中「订阅」） */
@@ -1155,8 +1364,12 @@ struct SubscriptionPage {
       .constraintSize({ minHeight: 56 })
       .borderRadius(24)
       .backgroundColor(Ui.navBackground)
+      .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+        colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+      })
+      .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturation, brightness: Ui.glassBrightness })
       .borderWidth(1)
-      .borderColor(Ui.border)
+      .borderColor(Ui.glassEdge)
       .shadow({ radius: 30, color: Ui.shadow, offsetY: 16 })
 
       Text(`SSRVPN for HarmonyOS v${AppInfo.version()}`)
@@ -1164,7 +1377,8 @@ struct SubscriptionPage {
     }
     .width('92%')
     .constraintSize({ maxWidth: Ui.bottomNavMaxWidth })
-    .margin({ bottom: 6 })
+    // 导航整体留在系统安全区之上；背景仍延伸到安全区，避免底部白条。
+    .margin({ bottom: 12 })
   }
 
   @Builder
@@ -1180,7 +1394,18 @@ struct SubscriptionPage {
     .constraintSize({ minWidth: 0 })
     .padding({ top: 6, bottom: 6 })
     .borderRadius(18)
-    .backgroundColor(selected ? Ui.selectedBackground : Color.Transparent)
+    .backgroundColor(selected ? Ui.selectedBackground : Ui.surfaceTranslucent)
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+      colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+    })
+    .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturationSoft, brightness: Ui.glassBrightnessSoft })
+    .borderWidth(1)
+    .borderColor(selected ? Ui.primary : Ui.glassEdge)
     .onClick(() => onTap())
+  }
+
+  pageTransition() {
+    PageTransitionEnter({ duration: 360, curve: Curve.EaseInOut }).opacity(0.68).scale({ x: 0.992, y: 0.992 })
+    PageTransitionExit({ duration: 300, curve: Curve.EaseInOut }).opacity(0.72).scale({ x: 1.008, y: 1.008 })
   }
 }

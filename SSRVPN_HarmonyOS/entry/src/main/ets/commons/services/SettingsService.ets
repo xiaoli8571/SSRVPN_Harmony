@@ -16,6 +16,8 @@ const KEY_SETTINGS = 'app_settings_json';
 const ASSET_SERVICE = 'ssrvpn_service';
 const ASSET_SECRET_KEY = 'api_secret';
 const KEY_SNAPSHOT = 'connection_snapshot_json';
+const KEY_SUBSCRIPTION_FAB_X = 'subscription_fab_x';
+const KEY_SUBSCRIPTION_FAB_Y = 'subscription_fab_y';
 
 /** 连接快照（对应 NativeConnectionSnapshot：重启恢复连接意图） */
 export class ConnectionSnapshot {
@@ -133,6 +135,24 @@ export class SettingsService {
       // 快照损坏则视为空
     }
     return snap;
+  }
+
+  static async loadSubscriptionFabPosition(): Promise<number[]> {
+    if (SettingsService.store === null) {
+      return [-1, -1];
+    }
+    const x = await SettingsService.store.get(KEY_SUBSCRIPTION_FAB_X, -1) as number;
+    const y = await SettingsService.store.get(KEY_SUBSCRIPTION_FAB_Y, -1) as number;
+    return [x, y];
+  }
+
+  static async saveSubscriptionFabPosition(x: number, y: number): Promise<void> {
+    if (SettingsService.store === null) {
+      return;
+    }
+    await SettingsService.store.put(KEY_SUBSCRIPTION_FAB_X, x);
+    await SettingsService.store.put(KEY_SUBSCRIPTION_FAB_Y, y);
+    await SettingsService.store.flush();
   }
 }
 

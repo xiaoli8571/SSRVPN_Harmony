@@ -294,7 +294,13 @@ export struct DiagnosticsSheet {
           .fontColor(this.running ? Ui.textTertiary : Ui.primary)
           .padding({ left: 8, right: 8, top: 4, bottom: 4 })
           .borderRadius(10)
-          .backgroundColor(Ui.inputBackground)
+          .backgroundColor(Ui.surfaceTranslucent)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+            colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+          })
+          .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+          .borderWidth(1)
+          .borderColor(Ui.glassEdge)
           .onClick(() => {
             if (!this.running) {
               this.runNow();
@@ -393,7 +399,18 @@ export struct DiagnosticsSheet {
       .scrollBar(BarState.Auto)
     }
     .padding(20)
-    .backgroundColor(Ui.surface)
+    .backgroundColor(Ui.surfaceTranslucent)
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+      colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+    })
+    .backgroundEffect({
+      radius: Ui.glassBlurRadius,
+      saturation: Ui.glassSaturationSoft,
+      brightness: Ui.glassBrightnessSoft
+    })
+    .borderWidth({ top: 1 })
+    .borderColor(Ui.glassEdge)
+    .shadow({ radius: 32, color: Ui.shadow, offsetY: -10 })
     .borderRadius({ topLeft: 20, topRight: 20 })
   }
 }

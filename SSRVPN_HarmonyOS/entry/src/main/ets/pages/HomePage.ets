@@ -8,7 +8,6 @@ import { SubscriptionService } from '../commons/services/SubscriptionService';
 import { SettingsService } from '../commons/services/SettingsService';
 import { PublicIpService } from '../commons/services/PublicIpService';
 import { PublicIpInfo, AppDiagnostics } from '../commons/models/PublicIpInfo';
-import { ProxyNode } from '../commons/models/ProxyNode';
 import { AppSettings } from '../commons/models/AppSettings';
 import { LatencyController } from '../commons/services/LatencyController';
 import { FormStateSync } from '../commons/services/FormStateSync';
@@ -22,6 +21,8 @@ import { AppInfo } from '../commons/utils/AppInfo';
 import { display } from '@kit.ArkUI';
 import { window } from '@kit.ArkUI';
 import { ThemeService } from '../theme/ThemeService';
+import { ClashConfigGenerator } from '../commons/services/ClashConfigGenerator';
+import { ProxyNode } from '../commons/models/ProxyNode';
 
 const TAG = 'HomePage';
 
@@ -48,10 +49,15 @@ struct AboutDialog {
         })
     }
     .padding(26)
-    .borderRadius(20)
+    .borderRadius(Ui.dialogRadius)
     .backgroundColor(Ui.surfaceTranslucent)
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+      colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+    })
+    .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturation, brightness: Ui.glassBrightness })
     .borderWidth(1)
-    .borderColor(Ui.border)
+    .borderColor(Ui.glassEdge)
+    .shadow({ radius: 32, color: Ui.shadow, offsetY: 16 })
   }
 }
 
@@ -78,7 +84,7 @@ struct TutorialDialog {
             .fontColor(Ui.textBlue)
             .width(22).height(22)
             .borderRadius(11)
-            .backgroundColor('#293675FF')
+            .backgroundColor(Ui.statusTint)
             .textAlign(TextAlign.Center)
           Text(step).fontSize(14).fontColor(Ui.textSecondary).layoutWeight(1)
         }
@@ -96,10 +102,112 @@ struct TutorialDialog {
         })
     }
     .padding(26)
-    .borderRadius(20)
+    .borderRadius(Ui.dialogRadius)
     .backgroundColor(Ui.surfaceTranslucent)
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+      colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+    })
+    .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturation, brightness: Ui.glassBrightness })
     .borderWidth(1)
-    .borderColor(Ui.border)
+    .borderColor(Ui.glassEdge)
+    .shadow({ radius: 32, color: Ui.shadow, offsetY: 16 })
+  }
+}
+
+@CustomDialog
+struct RulesDialog {
+  controller?: CustomDialogController;
+  @State rulesEnabled: boolean = true;
+  @State hyperAdRulesEnabled: boolean = true;
+  @State customRulesText: string = '';
+  private settings: AppSettings = new AppSettings();
+  private orchestrator: ConnectionOrchestrator = ConnectionOrchestrator.instance();
+
+  aboutToAppear(): void {
+    this.loadSettings();
+  }
+
+  private async loadSettings(): Promise<void> {
+    await SettingsService.init(getContext(this) as Context);
+    this.settings = await SettingsService.load();
+    this.rulesEnabled = this.settings.rulesEnabled;
+    this.hyperAdRulesEnabled = this.settings.hyperAdRulesEnabled;
+    this.customRulesText = this.settings.customRules.join('\n');
+  }
+
+  private async save(): Promise<void> {
+    const supplied = this.customRulesText.split('\n')
+      .map((value: string) => value.trim()).filter((value: string) => value.length > 0);
+    const normalized = ClashConfigGenerator.normalizeCustomRules(supplied);
+    const invalidCount = Math.max(0, supplied.length - normalized.length);
+    this.settings.rulesEnabled = this.rulesEnabled;
+    this.settings.hyperAdRulesEnabled = this.hyperAdRulesEnabled;
+    this.settings.customRules = normalized;
+    await SettingsService.save(this.settings);
+    const restarted = await this.orchestrator.restartIfConnected('rulesChanged');
+    if (this.controller !== undefined) {
+      this.controller.close();
+    }
+    const suffix = invalidCount > 0 ? `，已忽略 ${invalidCount} 条无效规则` : '';
+    promptAction.showToast({
+      message: restarted ? `规则已保存，正在自动重连${suffix}` : `规则已保存，下次连接生效${suffix}`
+    });
+  }
+
+  build() {
+    Column({ space: 14 }) {
+      Row() {
+        Text('规则').fontSize(20).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
+        Blank()
+        Text(this.rulesEnabled ? '已启用' : '已关闭')
+          .fontSize(12).fontColor(this.rulesEnabled ? Ui.success : Ui.textTertiary)
+      }.width('100%')
+      Row() {
+        Column({ space: 4 }) {
+          Text('启用规则功能').fontSize(15).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
+          Text('不需要规则时可直接关闭').fontSize(12).fontColor(Ui.textTertiary)
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.rulesEnabled })
+          .selectedColor(Ui.primaryBlueFill)
+          .onChange((value: boolean) => { this.rulesEnabled = value; })
+      }.width('100%').alignItems(VerticalAlign.Center)
+      Row() {
+        Text('HyperADRules 去广告').fontSize(14).fontColor(Ui.textPrimary).layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.hyperAdRulesEnabled })
+          .selectedColor(Ui.primaryBlueFill).enabled(this.rulesEnabled)
+          .onChange((value: boolean) => { this.hyperAdRulesEnabled = value; })
+      }.width('100%').alignItems(VerticalAlign.Center)
+      TextArea({ placeholder: '每行一条规则，例如 DOMAIN-SUFFIX,example.com,REJECT', text: this.customRulesText })
+        .enabled(this.rulesEnabled)
+        .onChange((value: string) => { this.customRulesText = value; })
+        .height(180).fontSize(13).fontColor(Ui.textPrimary).placeholderColor(Ui.textTertiary)
+        .backgroundColor(Ui.surfaceTranslucent).borderRadius(14).padding(12)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+          colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+        })
+        .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+        .borderWidth(1).borderColor(Ui.glassEdge)
+      Row({ space: 12 }) {
+        Button('取消').layoutWeight(1).fontColor(Ui.textSecondary)
+          .backgroundColor(Ui.surfaceTranslucent)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+            colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+          })
+          .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
+          .borderWidth(1).borderColor(Ui.glassEdge)
+          .onClick(() => { if (this.controller !== undefined) this.controller.close(); })
+        Button('保存').layoutWeight(1).fontColor(Color.White).backgroundColor(Ui.primaryBlueFill)
+          .onClick(() => this.save())
+      }.width('100%')
+    }
+    .padding(24).borderRadius(Ui.dialogRadius)
+    .backgroundColor(Ui.surfaceTranslucent)
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+      colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+    })
+    .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturation, brightness: Ui.glassBrightness })
+    .borderWidth(1).borderColor(Ui.glassEdge)
+    .shadow({ radius: 32, color: Ui.shadow, offsetY: 16 })
   }
 }
 
@@ -146,6 +254,11 @@ struct HomePage {
   });
   private tutorialDialog: CustomDialogController = new CustomDialogController({
     builder: TutorialDialog({})
+  });
+  private rulesDialog: CustomDialogController = new CustomDialogController({
+    builder: RulesDialog({}),
+    autoCancel: true,
+    alignment: DialogAlignment.Center
   });
 
   private async toggleTheme(): Promise<void> {
@@ -299,6 +412,17 @@ struct HomePage {
   }
 
   /** 对齐 HomeNodeController.resolveDefaultNode / resolveRuntimeSelectedNode 的简化实现 */
+  private selectedNode(): ProxyNode | null {
+    const preferred: ProxyNode | null = this.subs.findNode(this.settings.preferredNodeId);
+    if (preferred !== null) {
+      return preferred;
+    }
+    if (this.subs.nodes.length > 0) {
+      return this.subs.nodes[0];
+    }
+    return null;
+  }
+
   private refreshDisplayNode(): void {
     const preferred = this.subs.findNode(this.settings.preferredNodeId);
     if (preferred !== null) {
@@ -310,11 +434,6 @@ struct HomePage {
       return;
     }
     this.currentNodeName = '';
-  }
-
-  private selectedNode(): ProxyNode | null {
-    return this.subs.findNode(this.settings.preferredNodeId)
-      ?? (this.subs.nodes.length > 0 ? this.subs.nodes[0] : null);
   }
 
   private statusText(): string {
@@ -417,13 +536,9 @@ struct HomePage {
       Column() {
         Scroll() {
           Column({ space: 0 }) {
-            // ── 头部：关于 | SSRVPN(绝对居中) | 使用教程 + 主题切换 ──
+            // ── 头部：关于 + 规则 | SSRVPN(绝对居中) | 使用教程 + 主题切换 ──
             // 标题放在 Stack 里由系统居中，两侧操作项作为同一行的叠加层，
             // 不再参与标题的水平定位（此前右侧按钮会把标题挤偏）。
-            //
-            // 设置入口按用户要求隐藏（功能默认开启，节点仍为手动选择）。
-            // pages/SettingsPage 与相关持久化字段保留，需要时把下方注释掉的
-            // 「⚙ 设置」按钮恢复即可随时启用。
             Stack() {
               Text('SSRVPN')
                 .fontSize(26)
@@ -435,6 +550,10 @@ struct HomePage {
                   .fontSize(14).fontColor(Ui.textSecondary)
                   .padding({ left: 4, right: 4 })
                   .onClick(() => this.aboutDialog.open())
+                Text('规则')
+                  .fontSize(14).fontColor(Ui.textSecondary)
+                  .padding({ left: 8, right: 4 })
+                  .onClick(() => this.rulesDialog.open())
                 Blank()
                 Row({ space: 4 }) {
                   Text('使用教程')
@@ -452,15 +571,6 @@ struct HomePage {
                   .backgroundColor(Color.Transparent)
                   .accessibilityText('切换浅色或深色主题')
                   .onClick(() => this.toggleTheme())
-                  // 设置入口（默认隐藏，需要时取消注释即可恢复）
-                  // Text('⚙')
-                  //   .fontSize(20)
-                  //   .fontColor(Ui.textSecondary)
-                  //   .padding({ left: 4, right: 4 })
-                  //   .accessibilityText($r('app.string.settings_entry_accessibility'))
-                  //   .onClick(() => {
-                  //     router.pushUrl({ url: 'pages/SettingsPage' });
-                  //   })
                 }
               }
               .width('100%')
@@ -480,8 +590,12 @@ struct HomePage {
             .padding({ left: 14, right: 14, top: 7, bottom: 7 })
             .borderRadius(18)
             .backgroundColor(Ui.surfaceTranslucent)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+              colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+            })
+            .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturationSoft, brightness: Ui.glassBrightnessSoft })
             .borderWidth(1)
-            .borderColor(Ui.border)
+            .borderColor(Ui.glassEdge)
 
             Blank().height(28)
 
@@ -521,9 +635,11 @@ struct HomePage {
               .layoutWeight(1)
               .padding({ top: 12, bottom: 12 })
               .borderRadius(14)
-              .backgroundColor(Ui.surfaceMuted)
+              .backgroundColor(Ui.surfaceTranslucent)
+              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, { colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT })
+              .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
               .borderWidth(1)
-              .borderColor(Ui.border)
+              .borderColor(Ui.glassEdge)
 
               Column({ space: 4 }) {
                 Row({ space: 3 }) {
@@ -540,9 +656,11 @@ struct HomePage {
               .layoutWeight(1)
               .padding({ top: 12, bottom: 12 })
               .borderRadius(14)
-              .backgroundColor(Ui.surfaceMuted)
+              .backgroundColor(Ui.surfaceTranslucent)
+              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, { colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT })
+              .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
               .borderWidth(1)
-              .borderColor(Ui.border)
+              .borderColor(Ui.glassEdge)
 
               Column({ space: 4 }) {
                 Row({ space: 3 }) {
@@ -559,9 +677,11 @@ struct HomePage {
               .layoutWeight(1)
               .padding({ top: 12, bottom: 12 })
               .borderRadius(14)
-              .backgroundColor(Ui.surfaceMuted)
+              .backgroundColor(Ui.surfaceTranslucent)
+              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, { colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT })
+              .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
               .borderWidth(1)
-              .borderColor(Ui.border)
+              .borderColor(Ui.glassEdge)
 
               Column({ space: 4 }) {
                 Text(this.formatConnectionDuration(this.connectionDuration))
@@ -574,9 +694,11 @@ struct HomePage {
               .layoutWeight(1)
               .padding({ top: 12, bottom: 12 })
               .borderRadius(14)
-              .backgroundColor(Ui.surfaceMuted)
+              .backgroundColor(Ui.surfaceTranslucent)
+              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, { colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT })
+              .backgroundEffect({ radius: Ui.glassControlBlurRadius, saturation: Ui.glassControlSaturation, brightness: Ui.glassControlBrightness })
               .borderWidth(1)
-              .borderColor(Ui.border)
+              .borderColor(Ui.glassEdge)
             }
             .width('100%')
             .constraintSize({ maxWidth: 408 })
@@ -693,10 +815,14 @@ struct HomePage {
       .alignItems(VerticalAlign.Center)
       .padding({ left: 16, right: 16, top: 14, bottom: 14 })
       .borderRadius(22)
-      .backgroundColor(Ui.surfaceMuted)
+      .backgroundColor(Ui.surfaceTranslucent)
+      .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+        colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+      })
+      .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturationSoft, brightness: Ui.glassBrightnessSoft })
       .borderWidth(1)
-      .borderColor(Ui.border)
-      .shadow({ radius: 28, color: Ui.shadow, offsetY: 14 })
+      .borderColor(Ui.glassEdge)
+      .shadow({ radius: 32, color: Ui.shadow, offsetY: 16 })
     }
     .width('100%')
     .constraintSize({ maxWidth: 408 })
@@ -757,8 +883,12 @@ struct HomePage {
       .constraintSize({ minHeight: 56 })
       .borderRadius(24)
       .backgroundColor(Ui.navBackground)
+      .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
+        colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
+      })
+      .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturation, brightness: Ui.glassBrightness })
       .borderWidth(1)
-      .borderColor(Ui.border)
+      .borderColor(Ui.glassEdge)
       .shadow({ radius: 30, color: Ui.shadow, offsetY: 16 })
 
       Text(`SSRVPN for HarmonyOS v${AppInfo.version()}`)
@@ -784,5 +914,10 @@ struct HomePage {
     .borderRadius(18)
     .backgroundColor(selected ? Ui.selectedBackground : Color.Transparent)
     .onClick(() => onTap())
+  }
+
+  pageTransition() {
+    PageTransitionEnter({ duration: 360, curve: Curve.EaseInOut }).opacity(0.68).scale({ x: 0.992, y: 0.992 })
+    PageTransitionExit({ duration: 300, curve: Curve.EaseInOut }).opacity(0.72).scale({ x: 1.008, y: 1.008 })
   }
 }
