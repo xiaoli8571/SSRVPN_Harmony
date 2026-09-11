@@ -1,4 +1,4 @@
-﻿# ---- DevEco / OpenHarmony build outputs ----
+# ---- DevEco / OpenHarmony build outputs ----
 build/
 .hvigor/
 .cxx/
@@ -43,3 +43,35 @@ material/
 *.csr
 .clangd
 .clang-tidy
+
+# ---- SSRVPN security: snapshots / patches / build logs / temp artifacts ----
+# These dirs/files historically carried plaintext signing passwords.
+SSRVPN_HarmonyOS-*-Rollback-*/
+SSRVPN_HarmonyOS-*-Snapshot-*/
+SSRVPN_HarmonyOS-*-Upgrade/
+SSRVPN_HarmonyOS-before-fix-*.patch
+*-Rollback-*/
+*-Snapshot-*/
+*-Backup-*/
+*.patch
+*.diff
+*.log
+*.dmp
+hs_err_pid*.log
+replay_pid*.log
+b_err*.txt
+b_out*.txt
+bc.err
+*.tmp
+*.bak
+*.orig
+*.rej
+.env
+.env.*
+*secret*
+*credential*
+*passwd*
+*password*
+
+# ---- local MCP configuration (contains credentials; NEVER commit) ----
+.mcp.json

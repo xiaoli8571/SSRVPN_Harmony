@@ -1,5 +1,5 @@
 # =====================================================================
-# SSRVPN v5.0.5 one-shot: build -> sign release .app -> publish GitHub
+# SSRVPN v5.2 one-shot: build -> sign release .app -> publish GitHub
 # Run in a normal PowerShell window (Windows PowerShell 5.1 compatible):
 #   powershell -ExecutionPolicy Bypass -File build-sign-publish.ps1
 # It will prompt for your GitHub PAT (not stored anywhere).
@@ -8,7 +8,7 @@ $ErrorActionPreference = 'Stop'
 
 $repo   = 'C:\Users\xiaoli\Downloads\Agent-WorkerSpaces\SSRVPN-HarmonyOS'
 $proj   = "$repo\SSRVPN_HarmonyOS"
-$ver    = 'v5.0.5'
+$ver    = 'v5.2'
 $dl     = "$env:USERPROFILE\Downloads"
 
 $deveco = 'C:\Program Files\Huawei\DevEco Studio'
@@ -19,9 +19,24 @@ $cer    = "$repo\SSRVPN.cer"
 $p7b    = "$repo\SSRVPNRelease.p7b"
 $p12    = "$repo\SSRVPN.p12"
 $kAlias = 'ssrvpn'
-$kPwd   = 'Lijx.820115'
 
 function Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
+
+# SECURITY: the signing password is NEVER stored in this file or in the repo.
+# Priority: env var SSRVPN_KEY_PASSWORD -> interactive masked prompt.
+$kPwd = $null
+if ($env:SSRVPN_KEY_PASSWORD) {
+  $kPwd = $env:SSRVPN_KEY_PASSWORD
+  Step 'signing password loaded from SSRVPN_KEY_PASSWORD'
+} else {
+  $kPwdSecure = Read-Host 'Signing key password (SSRVPN_KEY_PASSWORD not set)' -AsSecureString
+  $kPwdPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($kPwdSecure)
+  $kPwd = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($kPwdPtr)
+  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($kPwdPtr)
+  $kPwdSecure = $null
+  Write-Host 'NOTE: set $env:SSRVPN_KEY_PASSWORD to avoid entering the password each run.' -ForegroundColor Yellow
+}
+if ([string]::IsNullOrEmpty($kPwd)) { throw 'empty signing password, aborting' }
 
 # ---------- 0. sanity ----------
 foreach ($f in @($hvigor, $tool, $cer, $p7b, $p12)) {
@@ -96,24 +111,103 @@ Get-ChildItem "$dl\SSRVPN_HarmonyOS-$ver-*" | Select-Object Name, Length, LastWr
 $token = Read-Host 'Paste GitHub PAT (not saved)'
 if ([string]::IsNullOrWhiteSpace($token)) { throw 'empty PAT, aborting publish (artifacts are ready in Downloads)' }
 
-Step 'git commit + push'
+Step 'git stage (WHITELIST only) + sensitive-material scan'
 Push-Location $repo
-git add -A
-git reset -q -- SSRVPN_HarmonyOS/build-profile.json5   # keep local signing config out of the repo
-$msg = "v4.0.38-5.0.3: store compliance + UX + local YAML import`n`n" +
-"- layered app icon (1024 fg/bg, square, no padding) with original K logo restored`n" +
-"- color contrast 2.1.4.1: text variants >=4.5:1, darker button fills, diagnostics wired`n" +
-"- seamless start window (theme-colored bg + transparent K glyph)`n" +
-"- long-press node delete with hidden-list persistence (survives refresh)`n" +
-"- headless test core: real-protocol latency before VPN connect (no TUN, no permission dialog)`n" +
-"- auto sort by latency after batch test; http subscription support (SSRF guards kept)`n" +
-"- hysteria2 upmbps/downmbps aliases (fixes server 404 auth when bandwidth params missing)`n" +
-"- power button: original blue ring + donut glow for connected state (radialGradient square bug fixed)`n" +
-"- startVpnExtensionAbility 15s race timeout (stuck spinner guard)`n" +
-"- local YAML import + allow renaming local:// subscriptions`n" +
-"- global node-name dedup (fix kernel startup abort on duplicate proxy names); version 5.0.5"
-$msg | git commit -F -
-$authValue = :ToBase64String([Text.Encoding]::ASCII.GetBytes("xiaoli8571:$token"))
+
+# ---- Sensitive-material scanner -------------------------------------------
+# File-name blacklist + content-pattern scan. Any hit ABORTS the commit.
+$nameBlacklist = @(
+  '\.p12$', '\.p7b$', '\.keystore$', '\.jks$', '\.cer$', '\.csr$', '\.pem$', '\.key$',
+  '(?i)pass(word)?', '(?i)secret', '(?i)credential', '(?i)token',
+  '\.log$', '\.dmp$', 'hs_err_pid', 'replay_pid',
+  '(?i)rollback-\d{8}', '(?i)snapshot-\d{8}', '(?i)backup-\d{8}',
+  '^material/', '(?i)\.patch$'
+)
+# Content patterns: POSIX ERE for `git grep -f`. NOTE: git ERE has NO inline
+# (?i) flag, so case-insensitive patterns live in a separate list run with -i.
+$contentPatterns = @(
+  'Lijx\.820115',                                     # known legacy literal
+  '((key|store)Password)[[:space:]]*:',               # json5 explicit pwd key
+  'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY',
+  'ghp_[A-Za-z0-9]{20,}',                             # github PAT
+  '[0-9a-f]{64,}'                                     # long hex blob (HarmonyOS pwd/certish)
+)
+$contentPatternsI = @(
+  '(keyPassword|storePassword|KeyPwd|StorePwd|keystorePwd)',  # camelCase pwd keys
+  'secret',
+  'credential'
+)
+$scanFail = @()
+# 1) staged file-name blacklist
+$staged = @(git diff --cached --name-only)
+foreach ($f in $staged) {
+  foreach ($p in $nameBlacklist) { if ($f -match $p) { $scanFail += "NAME  $f  (matched /$p/)" } }
+}
+# 2) staged-content pattern scan (patterns via -f file to avoid arg mangling)
+function Invoke-PatScan([string[]]$pats, [switch]$IgnoreCase) {
+  $patFile = Join-Path $env:TEMP ('ssrvpn_scan_' + [guid]::NewGuid().ToString('N') + '.txt')
+  [System.IO.File]::WriteAllLines($patFile, $pats)
+  try {
+    $a = @('-I', '-l', '-E', '-f', $patFile, '--cached')
+    if ($IgnoreCase) { $a = @('-i') + $a }
+    return @(git grep @a 2>$null)
+  } finally { Remove-Item $patFile -Force -ErrorAction SilentlyContinue }
+}
+foreach ($h in (Invoke-PatScan $contentPatterns))            { $scanFail += "CONTENT  $h" }
+foreach ($h in (Invoke-PatScan $contentPatternsI -IgnoreCase)) { $scanFail += "CONTENT(i)  $h" }
+if ($scanFail.Count -gt 0) {
+  Write-Host 'SECURITY SCAN FAILED - commit aborted. Offending staged entries:' -ForegroundColor Red
+  $scanFail | Sort-Object -Unique | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+  git reset -q
+  Pop-Location
+  throw 'sensitive material detected in staged set; nothing committed'
+}
+Write-Host 'sensitive-material scan: PASS (0 hits)' -ForegroundColor Green
+
+# ---- WHITELIST staging (explicit paths only) ------------------------------
+$msg = @"
+v4.0.38-5.0.3: store compliance + UX + local YAML import
+
+- layered app icon (1024 fg/bg, square, no padding) with original K logo restored
+- color contrast 2.1.4.1: text variants >=4.5:1, darker button fills, diagnostics wired
+- seamless start window (theme-colored bg + transparent K glyph)
+- long-press node delete with hidden-list persistence (survives refresh)
+- headless test core: real-protocol latency before VPN connect (no TUN, no permission dialog)
+- auto sort by latency after batch test; http subscription support (SSRF guards kept)
+- hysteria2 upmbps/downmbps aliases (fixes server 404 auth when bandwidth params missing)
+- power button: original blue ring + donut glow for connected state (radialGradient square bug fixed)
+- startVpnExtensionAbility 15s race timeout (stuck spinner guard)
+- local YAML import + allow renaming local:// subscriptions
+- global node-name dedup (fix kernel startup abort on duplicate proxy names)
+"@
+
+# Whitelist: source / resources / necessary config / docs ONLY.
+# NOTE: no -A, no -u. Snapshot, rollback, backup, cert and log dirs are never staged.
+git reset -q
+git add -- `
+  'SSRVPN_HarmonyOS/AppScope' `
+  'SSRVPN_HarmonyOS/entry/src' `
+  'SSRVPN_HarmonyOS/entry/libs' `
+  'SSRVPN_HarmonyOS/scripts' `
+  'SSRVPN_HarmonyOS/oh-package.json5' `
+  'SSRVPN_HarmonyOS/build-profile.json5' `
+  'SSRVPN_HarmonyOS/hvigorfile.ts' `
+  'SSRVPN_HarmonyOS/entry/src/main/module.json5' `
+  'build-sign-publish.ps1' `
+  'README.md' `
+  'BUILD_README.md' `
+  'SECURITY_KEY_ROTATION.md' `
+  '.gitignore'
+
+# Guard: signing config must stay local (env-var placeholders only)
+git reset -q -- 'SSRVPN_HarmonyOS/build-profile.json5' 2>$null
+
+$stagedFinal = @(git diff --cached --name-only)
+if ($stagedFinal.Count -eq 0) { Pop-Location; throw 'nothing staged after whitelist; aborting' }
+Write-Host ("staged {0} path(s) via whitelist" -f $stagedFinal.Count) -ForegroundColor Cyan
+
+$stagedFinal | git commit -F -
+$authValue = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("xiaoli8571:$token"))
 git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $authValue" push origin main
 $authValue = $null
 if ($LASTEXITCODE -ne 0) { Pop-Location; throw 'git push FAILED' }

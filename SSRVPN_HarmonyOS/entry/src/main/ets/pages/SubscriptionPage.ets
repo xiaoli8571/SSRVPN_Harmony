@@ -142,6 +142,38 @@ struct EditSubscriptionDialog {
   }
 }
 
+@CustomDialog
+struct AddSubscriptionDialog {
+  controller?: CustomDialogController;
+  @State subscriptionName: string = '';
+  @State subscriptionUrl: string = '';
+  onConfirm: (name: string, url: string) => void = () => {};
+
+  build() {
+    Column({ space: 14 }) {
+      Text('URL添加').fontSize(18).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
+      TextInput({ placeholder: '订阅名称（可选，留空自动解析）', text: this.subscriptionName })
+        .onChange((v: string) => { this.subscriptionName = v; })
+        .height(46).borderRadius(12).backgroundColor(Ui.inputBackground)
+        .fontColor(Ui.textPrimary).placeholderColor(Ui.textTertiary)
+      TextInput({ placeholder: '订阅链接', text: this.subscriptionUrl })
+        .onChange((v: string) => { this.subscriptionUrl = v; })
+        .height(46).borderRadius(12).backgroundColor(Ui.inputBackground)
+        .fontColor(Ui.textPrimary).placeholderColor(Ui.textTertiary)
+      Row({ space: 12 }) {
+        Button('取消').layoutWeight(1).backgroundColor(Ui.surface).fontColor(Ui.textSecondary)
+          .onClick(() => { if (this.controller !== undefined) this.controller.close(); })
+        Button('添加').layoutWeight(1).backgroundColor(Ui.primaryBlueFill).fontColor(Color.White)
+          .onClick(() => {
+            if (this.controller !== undefined) this.controller.close();
+            this.onConfirm(this.subscriptionName, this.subscriptionUrl);
+          })
+      }.width('100%')
+    }.padding(24).borderRadius(20).backgroundColor(Ui.surfaceStrong)
+      .borderWidth(1).borderColor(Ui.borderStrong)
+  }
+}
+
 /**
  * 诊断与运行日志 弹窗（1:1 对齐 upstream showSsrvpnDiagnosticsDialog + AppDiagnosticsView:
  * 居中对话框、#0E1018 深底、圆角16; 标题行(🐞+✕) → 结论摘要 → [复制报告][重新检查]
@@ -513,6 +545,8 @@ struct DiagnosticsLogDialog {
 struct SubscriptionPage {
   @State subs: Subscription[] = [];
   @State inputUrl: string = '';
+  @State inputName: string = '';
+  @State showAddMenu: boolean = false;
   @State isAdding: boolean = false;
   @State isRefreshing: boolean = false;
   @State isImporting: boolean = false;
@@ -537,6 +571,15 @@ struct SubscriptionPage {
       getInitialUrl: (): string => this.editTarget ? this.editTarget.url : '',
       onConfirm: (name: string, url: string) => {
         this.doEdit(name, url);
+      }
+    })
+  });
+  private addDialog: CustomDialogController = new CustomDialogController({
+    builder: AddSubscriptionDialog({
+      onConfirm: (name: string, url: string) => {
+        this.inputName = name;
+        this.inputUrl = url;
+        this.addSubscription();
       }
     })
   });
@@ -604,10 +647,11 @@ struct SubscriptionPage {
         this.isAdding = false;
         return;
       }
-      const name = `订阅 ${this.subs.length + 1}`;
+      const name = this.inputName.trim().length > 0 ? this.inputName.trim() : `订阅 ${this.subs.length + 1}`;
       const sub = await this.service.addSubscription(name, raw, '', '');
       this.reload();
       this.inputUrl = '';
+      this.inputName = '';
       const result = await this.service.refreshSubscription(sub.id);
       this.reload();
       if (result.status === SubscriptionRefreshStatus.OK && result.nodeCount > 0) {
@@ -909,73 +953,6 @@ struct SubscriptionPage {
             .padding({ left: 18, right: 18, top: 10, bottom: 6 })
 
             Column() {
-              // ── 添加卡（对齐 _SubscriptionAddCard；内联样式） ──
-              Column() {
-                Row({ space: 10 }) {
-                  Text('➕').fontSize(22)
-                  Text('添加订阅').fontSize(19).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
-                }
-                .width('100%')
-
-                Blank().height(18)
-                TextInput({ placeholder: '粘贴订阅或节点链接', text: this.inputUrl })
-                  .onChange((v: string) => { this.inputUrl = v; })
-                  .enabled(!(this.isAdding || this.isRefreshing))
-                  .height(50)
-                  .borderRadius(18)
-                  .backgroundColor(Ui.inputBackground)
-                  .fontColor(Ui.textPrimary)
-                  .placeholderColor(Ui.textTertiary)
-                  .padding({ left: 16, right: 16 })
-                  .onSubmit(() => this.addSubscription())
-                Blank().height(16)
-                Row({ space: 12 }) {
-                  Button(this.isAdding ? '添加中…' : '添加')
-                    .layoutWeight(1)
-                    .height(52)
-                    .fontSize(17)
-                    .fontWeight(FontWeight.Bold)
-                    .fontColor(Color.White)
-                    .backgroundColor(this.isAdding ? Ui.buttonDisabled : Ui.primaryBlue)
-                    .borderRadius(16)
-                    .enabled(!(this.isAdding || this.isRefreshing || this.isScanning || this.isImporting))
-                    .onClick(() => this.addSubscription())
-                  Button(this.isScanning ? '扫描中…' : '二维码导入')
-                    .layoutWeight(1)
-                    .height(52)
-                    .fontSize(16)
-                    .fontWeight(FontWeight.Bold)
-                    .fontColor(Color.White)
-                    .backgroundColor(this.isScanning ? Ui.buttonDisabled : Ui.primaryBlue)
-                    .borderRadius(16)
-                    .enabled(!(this.isAdding || this.isRefreshing || this.isScanning || this.isImporting))
-                    .onClick(() => this.importSubscriptionFromQr())
-                }
-                .width('100%')
-
-                Blank().height(12)
-                Button(this.isImporting ? '导入中…' : '📂 导入本地 YAML 文件')
-                  .width('100%')
-                  .height(46)
-                  .fontSize(15)
-                  .fontColor(Ui.textPrimary)
-                  .backgroundColor(Ui.surface)
-                  .borderRadius(14)
-                  .borderWidth(1)
-                  .borderColor(Ui.border)
-                  .enabled(!(this.isAdding || this.isRefreshing || this.isImporting || this.isScanning))
-                  .onClick(() => this.importYamlFile())
-              }
-              .width('100%')
-              .padding(22)
-              .borderRadius(24)
-              .backgroundColor(Ui.surfaceTranslucent)
-              .borderWidth(1)
-              .borderColor(Ui.border)
-              .shadow({ radius: 28, color: Ui.shadow, offsetY: 14 })
-
-              Blank().height(30)
-
               // ── 列表头（对齐 _SubscriptionListHeader） ──
               Row() {
                 Text('我的订阅')
@@ -1039,7 +1016,7 @@ struct SubscriptionPage {
                   Text('📡').fontSize(48).fontColor(Ui.textTertiary)
                   Text('暂无订阅')
                     .fontSize(17).fontWeight(FontWeight.Bold).fontColor(Ui.textSecondary)
-                  Text('在上方粘贴订阅链接开始使用')
+                  Text('点击右下角 + 添加订阅')
                     .fontSize(13).fontColor(Ui.textTertiary)
                 }
                 .width('100%')
@@ -1138,6 +1115,26 @@ struct SubscriptionPage {
 
       // ── 浮动底部导航（与主页一致, 主页/订阅可互相切换, 无需返回键） ──
       this.BottomNav()
+
+      if (this.showAddMenu) {
+        Column({ space: 8 }) {
+          Button('URL添加').width(150).backgroundColor(Ui.surface).fontColor(Ui.textPrimary)
+            .onClick(() => { this.showAddMenu = false; this.addDialog.open(); })
+          Button('二维码添加').width(150).backgroundColor(Ui.surface).fontColor(Ui.textPrimary)
+            .onClick(() => { this.showAddMenu = false; this.importSubscriptionFromQr(); })
+          Button('导入本地文件').width(150).backgroundColor(Ui.surface).fontColor(Ui.textPrimary)
+            .onClick(() => { this.showAddMenu = false; this.importYamlFile(); })
+        }
+        .padding(10).borderRadius(18).backgroundColor(Ui.surfaceStrong)
+        .position({ right: 24, bottom: 124 })
+        .shadow({ radius: 24, color: Ui.shadow, offsetY: 10 })
+      }
+      Button('+')
+        .width(58).height(58).fontSize(32).fontWeight(FontWeight.Bold)
+        .fontColor(Color.White).backgroundColor(Ui.accent).borderRadius(29)
+        .position({ right: 24, bottom: 58 })
+        .shadow({ radius: 22, color: Ui.shadow, offsetY: 10 })
+        .onClick(() => { this.showAddMenu = !this.showAddMenu; })
     }
     .width('100%').height('100%')
   }

@@ -130,11 +130,11 @@ index 006e856..4b01c7a 100644
 +        "material": {
 +          "certpath": "C:\\Users\\xiaoli\\Downloads\\Agent-WorkerSpaces\\SSRVPN-HarmonyOS\\SSRVPN.cer",
 +          "keyAlias": "ssrvpn",
-+          "keyPassword": "0000001b7a3c9fadc3d048c8bab5669be7fc12830134724e7445bd3c945f8dd59fa47dea7acbe1adf07cb4",
++          "keyPassword": "<REDACTED-SET-VIA-ENV-SSRVPN_KEY_PASSWORD>",
 +          "profile": "C:\\Users\\xiaoli\\Downloads\\Agent-WorkerSpaces\\SSRVPN-HarmonyOS\\SSRVPNRelease.p7b",
 +          "signAlg": "SHA256withECDSA",
 +          "storeFile": "C:\\Users\\xiaoli\\Downloads\\Agent-WorkerSpaces\\SSRVPN-HarmonyOS\\SSRVPN.p12",
-+          "storePassword": "0000001b7a3c9fadc3d048c8bab5669be7fc12830134724e7445bd3c945f8dd59fa47dea7acbe1adf07cb4"
++          "storePassword": "<REDACTED-SET-VIA-ENV-SSRVPN_KEY_PASSWORD>"
 +        }
 +      }
 +    ],
