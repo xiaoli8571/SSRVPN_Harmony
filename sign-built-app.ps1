@@ -64,7 +64,9 @@ if ($LASTEXITCODE -ne 0) {
   throw 'APP shell signing failed'
 }
 
-& $java -jar $signTool verify-app -inFile $signedApp
+$verifiedCert = Join-Path $dist 'SSRVPN_HarmonyOS-app-verified-cert-chain.cer'
+$verifiedProfile = Join-Path $dist 'SSRVPN_HarmonyOS-app-verified-profile.p7b'
+& $java -jar $signTool verify-app -inFile $signedApp -outCertChain $verifiedCert -outProfile $verifiedProfile
 if ($LASTEXITCODE -ne 0) {
   throw 'Signed APP verification failed'
 }
