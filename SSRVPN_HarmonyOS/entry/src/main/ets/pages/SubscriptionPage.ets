@@ -1307,15 +1307,24 @@ struct SubscriptionPage {
         .position({ x: Math.max(12, this.currentFabX() - 102), y: Math.max(12, this.currentFabY() - 174) })
         .shadow({ radius: 24, color: Ui.shadow, offsetY: 10 })
       }
-      Button('+')
-        .width(58).height(58).fontSize(32).fontWeight(FontWeight.Bold)
-        .fontColor(Ui.textPrimary).backgroundColor(Ui.surfaceTranslucent).borderRadius(29)
+      Stack({ alignContent: Alignment.Center }) {
+        Circle({ width: 58, height: 58 })
+          .fill(Ui.surfaceTranslucent)
+          .stroke(Ui.glassEdge)
+          .strokeWidth(1)
+        Text('+')
+          .fontSize(32)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Ui.textPrimary)
+          .translate({ y: -1 })
+      }
+        .width(58).height(58)
+        .borderRadius(29)
         .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
           colorMode: ThemeColorMode.SYSTEM,
           adaptiveColor: AdaptiveColor.DEFAULT
         })
         .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturation, brightness: Ui.glassBrightness })
-        .borderWidth(1).borderColor(Ui.glassEdge)
         .position({ x: this.currentFabX(), y: this.currentFabY() })
         .shadow({ radius: 22, color: Ui.shadow, offsetY: 10 })
         .onClick(() => { this.showAddMenu = !this.showAddMenu; })
@@ -1394,13 +1403,7 @@ struct SubscriptionPage {
     .constraintSize({ minWidth: 0 })
     .padding({ top: 6, bottom: 6 })
     .borderRadius(18)
-    .backgroundColor(selected ? Ui.selectedBackground : Ui.surfaceTranslucent)
-    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, {
-      colorMode: ThemeColorMode.SYSTEM, adaptiveColor: AdaptiveColor.DEFAULT
-    })
-    .backgroundEffect({ radius: Ui.glassBlurRadius, saturation: Ui.glassSaturationSoft, brightness: Ui.glassBrightnessSoft })
-    .borderWidth(1)
-    .borderColor(selected ? Ui.primary : Ui.glassEdge)
+    .backgroundColor(selected ? Ui.selectedBackground : Color.Transparent)
     .onClick(() => onTap())
   }
 
