@@ -85,7 +85,6 @@ export struct PowerButton {
     .width(this.buttonSize)
     .height(this.buttonSize)
     .scale(this.pressed ? { x: 0.95, y: 0.95 } : { x: 1, y: 1 })
-    .animation({ duration: 150, curve: Curve.EaseOut })
     .onClick(() => {
       animateTo({ duration: 120 }, () => { this.pressed = true; });
       setTimeout(() => {

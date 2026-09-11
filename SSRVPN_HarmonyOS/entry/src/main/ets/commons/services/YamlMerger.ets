@@ -41,6 +41,16 @@ export class MergedProxy {
   hyUp: string = '';
   hyDown: string = '';
   alpnList: string = '';
+  /**
+   * 结构化槽位未覆盖的额外 mihomo 字段, JSON 数组序列化: [[key, value], ...]。
+   * 覆盖两类场景:
+   * 1) 已知协议(ss/vmess/vless/trojan/hysteria2)的附加键: plugin/plugin-opts、
+   *    h2-opts、ports、tfo、mptcp、ip-version、smux、packet-encoding 等;
+   * 2) 中继协议(tuic/hysteria/http/socks5/snell/anytls/ssh/mieru/wireguard)
+   *    的结构化槽位之外的全部专用键。
+   * 键名与值在入库前均经白名单校验, 生成配置时原样回写 —— 不再静默丢字段。
+   */
+  extraOpts: string = '';
 }
 
 /** 合并限额（照抄 upstream SubscriptionYamlMerger 常量） */
@@ -285,37 +295,316 @@ export class YamlMerger {
         throw new YamlNodeError('代理节点嵌套 flow-map 字段格式无效');
       }
       const key = YamlMerger.decodeScalar(pair.substring(0, idx));
-      if (!allowedKeys.has(key) || result.has(key)) {
-        throw new YamlNodeError(`代理节点包含未知或重复嵌套字段：${key}`);
+      // 真实面板会在嵌套结构里附带扩展键（reality-opts._spider-x、
+      // ws-opts.v2ray-http-upgrade、grpc-opts.* 等）。未知键必须逐项忽略，
+      // 一旦抛错就会让调用方丢弃整段嵌套配置 —— 典型后果是 REALITY 的
+      // public-key/short-id 全部丢失，内核退化成普通 TLS 并握手失败。
+      if (!allowedKeys.has(key)) {
+        continue;
+      }
+      if (result.has(key)) {
+        throw new YamlNodeError(`代理节点包含重复嵌套字段：${key}`);
       }
       result.set(key, pair.substring(idx + 1).trim());
     }
     return result;
   }
 
-  private static parseNestedOptions(fields: Map<string, string>, p: MergedProxy): void {
-    const realityRaw = fields.get('reality-opts');
-    if (realityRaw !== undefined) {
-      const reality = YamlMerger.parseRestrictedFlowMap(realityRaw,
-        new Set<string>(['public-key', 'short-id']));
-      p.realityPublicKey = YamlMerger.decodeScalar(reality.get('public-key') ?? '');
-      p.realityShortId = YamlMerger.decodeScalar(reality.get('short-id') ?? '');
+  /** 行有效缩进 = 前导空格数 + (`- ` 占 2 列, 列表项键位右移)。块式嵌套判定用。 */
+  private static lineIndent(line: string): number {
+    const trimmed = line.trimStart();
+    const lead = line.length - trimmed.length;
+    return trimmed.startsWith('- ') ? lead + 2 : lead;
+  }
+
+  /**
+   * 提取块式（缩进多行）嵌套体的原始行。
+   * 形如：
+   *   ws-opts:
+   *     path: /ws
+   *     headers:
+   *       Host: h.example.com
+   * 返回 body 行；若该键为行内 flow-map（`ws-opts: {...}`）则返回空数组，交给 flow 解析。
+   * 缩进异常/找不到该键时返回空数组，绝不抛错（调用方逐项降级）。
+   */
+  private static extractBlockBody(itemLines: string[], key: string): string[] {
+    for (let i = 0; i < itemLines.length; i++) {
+      const t = itemLines[i].trim().replace(/^-\s+/, '');
+      const idx = YamlMerger.findUnquotedColon(t);
+      if (idx <= 0) {
+        continue;
+      }
+      let k = '';
+      try {
+        k = YamlMerger.decodeScalar(t.substring(0, idx).trim());
+      } catch (e) {
+        continue;
+      }
+      if (k !== key) {
+        continue;
+      }
+      if (t.substring(idx + 1).trim().length > 0) {
+        return []; // 行内 flow-map
+      }
+      const base = YamlMerger.lineIndent(itemLines[i]);
+      const body: string[] = [];
+      for (let j = i + 1; j < itemLines.length; j++) {
+        const raw = itemLines[j];
+        if (raw.trim().length === 0) {
+          continue;
+        }
+        if (YamlMerger.lineIndent(raw) <= base) {
+          break; // 回到同级 = 块体结束
+        }
+        body.push(raw);
+      }
+      return body;
     }
-    const wsRaw = fields.get('ws-opts');
-    if (wsRaw !== undefined) {
-      const ws = YamlMerger.parseRestrictedFlowMap(wsRaw, new Set<string>(['path', 'headers']));
-      p.wsPath = YamlMerger.decodeScalar(ws.get('path') ?? '');
-      const headersRaw = ws.get('headers');
-      if (headersRaw !== undefined) {
-        const headers = YamlMerger.parseRestrictedFlowMap(headersRaw, new Set<string>(['Host']));
-        p.wsHost = YamlMerger.decodeScalar(headers.get('Host') ?? '');
+    return [];
+  }
+
+  /** 块体里的简单 key:value 白名单标量（reality-opts / grpc-opts）；未知键逐项忽略。 */
+  private static parseSimpleBlock(bodyLines: string[], allowed: Set<string>): Map<string, string> {
+    const out = new Map<string, string>();
+    for (const raw of bodyLines) {
+      const t = raw.trim().replace(/^-\s+/, '');
+      if (t.length === 0 || t.startsWith('#')) {
+        continue;
+      }
+      const idx = YamlMerger.findUnquotedColon(t);
+      if (idx <= 0) {
+        continue;
+      }
+      let k = '';
+      try {
+        k = YamlMerger.decodeScalar(t.substring(0, idx).trim());
+      } catch (e) {
+        continue;
+      }
+      if (!allowed.has(k) || out.has(k)) {
+        continue;
+      }
+      const rawVal = t.substring(idx + 1).trim();
+      if (rawVal.length === 0) {
+        continue;
+      }
+      try {
+        out.set(k, YamlMerger.decodeScalar(rawVal));
+      } catch (e) {
+        // 值异常, 忽略该项
       }
     }
-    const grpcRaw = fields.get('grpc-opts');
-    if (grpcRaw !== undefined) {
-      const grpc = YamlMerger.parseRestrictedFlowMap(grpcRaw,
-        new Set<string>(['grpc-service-name']));
-      p.grpcServiceName = YamlMerger.decodeScalar(grpc.get('grpc-service-name') ?? '');
+    return out;
+  }
+
+  /**
+   * 块式 ws-opts: 取 path 与 headers.Host（也容忍平铺的 Host）。
+   * headers 支持行内 flow-map（`headers: {Host: x}`）与块式两种写法；
+   * 未知键（v2ray-http-upgrade 等）逐项忽略，绝不抛错。
+   */
+  private static parseWsBlock(bodyLines: string[]): Map<string, string> {
+    const out = new Map<string, string>();
+    let headersIndent = -1;
+    for (const raw of bodyLines) {
+      const t = raw.trim().replace(/^-\s+/, '');
+      if (t.length === 0 || t.startsWith('#')) {
+        continue;
+      }
+      const idx = YamlMerger.findUnquotedColon(t);
+      if (idx <= 0) {
+        continue;
+      }
+      let k = '';
+      try {
+        k = YamlMerger.decodeScalar(t.substring(0, idx).trim());
+      } catch (e) {
+        continue;
+      }
+      const indent = YamlMerger.lineIndent(raw);
+      const rawVal = t.substring(idx + 1).trim();
+      if (k === 'path') {
+        if (rawVal.length > 0 && !out.has('path')) {
+          try {
+            out.set('path', YamlMerger.decodeScalar(rawVal));
+          } catch (e) {
+          }
+        }
+        headersIndent = -1;
+      } else if (k === 'headers') {
+        if (rawVal.startsWith('{')) {
+          try {
+            const h = YamlMerger.parseRestrictedFlowMap(rawVal, new Set<string>(['Host', 'host']));
+            const hv = h.get('Host') ?? h.get('host');
+            if (hv !== undefined && !out.has('Host')) {
+              out.set('Host', YamlMerger.decodeScalar(hv));
+            }
+          } catch (e) {
+          }
+          headersIndent = -1;
+        } else {
+          headersIndent = indent;
+        }
+      } else if (k === 'Host' || k === 'host') {
+        if (rawVal.length > 0 && !out.has('Host')) {
+          try {
+            out.set('Host', YamlMerger.decodeScalar(rawVal));
+          } catch (e) {
+          }
+        }
+      } else if (headersIndent >= 0 && indent <= headersIndent) {
+        headersIndent = -1;
+      }
+    }
+    return out;
+  }
+
+  /** 顶层 ws-headers 别名取值：支持 `{Host: x}` / `Host: x` / `Host=x`；异常返回 ''。 */
+  private static extractHeaderHost(value: string): string {
+    const v = value.trim();
+    if (v.length === 0) {
+      return '';
+    }
+    if (v.startsWith('{')) {
+      try {
+        const h = YamlMerger.parseRestrictedFlowMap(v, new Set<string>(['Host', 'host']));
+        const hv = h.get('Host') ?? h.get('host');
+        return hv !== undefined ? YamlMerger.decodeScalar(hv) : '';
+      } catch (e) {
+        return '';
+      }
+    }
+    const m = v.match(/host\s*[:=]\s*(.+)$/i);
+    if (m !== null && m.length > 1) {
+      try {
+        return YamlMerger.decodeScalar(m[1].trim());
+      } catch (e) {
+        return '';
+      }
+    }
+    return '';
+  }
+
+  /**
+   * 解析 reality/ws/grpc 嵌套项。
+   *
+   * 三种来源按优先级合并，任一来源结构异常都只降级该项，绝不丢整段/整节点：
+   *   1) 行内 flow-map（`ws-opts: {path: "/x", headers: {Host: "h"}}`）—— 原有行为；
+   *   2) 块式（缩进多行，`ws-opts:` + `path:` + `headers:` + `Host:`）—— 新增；
+   *   3) 顶层别名（ws-path / ws-host / ws-headers）—— 新增。
+   * 已解析到的非空值不会被后续来源覆盖（“订阅给了就严格保留”）。
+   */
+  private static parseNestedOptions(fields: Map<string, string>, p: MergedProxy,
+    itemLines: string[]): void {
+    // 顶层别名（优先级最低，先落位，后续 ws-opts 非空值可补齐/覆盖）
+    const aliasPath = fields.get('ws-path');
+    if (aliasPath !== undefined && aliasPath.length > 0) {
+      p.wsPath = aliasPath;
+    }
+    const aliasHost = fields.get('ws-host');
+    if (aliasHost !== undefined && aliasHost.length > 0) {
+      p.wsHost = aliasHost;
+    }
+    if (p.wsHost.length === 0) {
+      const aliasHeaders = fields.get('ws-headers') ?? '';
+      if (aliasHeaders.length > 0) {
+        p.wsHost = YamlMerger.extractHeaderHost(aliasHeaders);
+      }
+    }
+
+    // reality-opts：flow-map 优先，失败/缺失回退块式
+    const realityFlow = fields.get('reality-opts');
+    if (realityFlow !== undefined && realityFlow.trim().length > 0) {
+      try {
+        const reality = YamlMerger.parseRestrictedFlowMap(realityFlow,
+          new Set<string>(['public-key', 'short-id']));
+        const pk = reality.get('public-key');
+        if (pk !== undefined) {
+          p.realityPublicKey = YamlMerger.decodeScalar(pk);
+        }
+        const sid = reality.get('short-id');
+        if (sid !== undefined) {
+          p.realityShortId = YamlMerger.decodeScalar(sid);
+        }
+      } catch (e) {
+        // 结构异常按「未提供」降级
+      }
+    }
+    if (p.realityPublicKey.length === 0 && p.realityShortId.length === 0) {
+      const realityBlock = YamlMerger.extractBlockBody(itemLines, 'reality-opts');
+      if (realityBlock.length > 0) {
+        const m = YamlMerger.parseSimpleBlock(realityBlock,
+          new Set<string>(['public-key', 'short-id']));
+        const pk = m.get('public-key');
+        if (pk !== undefined && pk.length > 0) {
+          p.realityPublicKey = pk;
+        }
+        const sid = m.get('short-id');
+        if (sid !== undefined && sid.length > 0) {
+          p.realityShortId = sid;
+        }
+      }
+    }
+
+    // ws-opts：flow-map 优先，失败/缺失回退块式
+    const wsFlow = fields.get('ws-opts');
+    if (wsFlow !== undefined && wsFlow.trim().length > 0) {
+      try {
+        const ws = YamlMerger.parseRestrictedFlowMap(wsFlow, new Set<string>(['path', 'headers']));
+        const pathV = ws.get('path');
+        if (pathV !== undefined && pathV.length > 0) {
+          p.wsPath = YamlMerger.decodeScalar(pathV);
+        }
+        const headersRaw = ws.get('headers');
+        if (headersRaw !== undefined) {
+          const headers = YamlMerger.parseRestrictedFlowMap(headersRaw,
+            new Set<string>(['Host', 'host']));
+          const hostV = headers.get('Host') ?? headers.get('host');
+          if (hostV !== undefined && hostV.length > 0) {
+            p.wsHost = YamlMerger.decodeScalar(hostV);
+          }
+        }
+      } catch (e) {
+        // 结构异常按「未提供」降级
+      }
+    }
+    if (p.wsPath.length === 0 && p.wsHost.length === 0) {
+      const wsBlock = YamlMerger.extractBlockBody(itemLines, 'ws-opts');
+      if (wsBlock.length > 0) {
+        const ws = YamlMerger.parseWsBlock(wsBlock);
+        const bp = ws.get('path');
+        if (bp !== undefined && bp.length > 0) {
+          p.wsPath = bp;
+        }
+        const bh = ws.get('Host');
+        if (bh !== undefined && bh.length > 0) {
+          p.wsHost = bh;
+        }
+      }
+    }
+
+    // grpc-opts：flow-map 优先，失败/缺失回退块式
+    const grpcFlow = fields.get('grpc-opts');
+    if (grpcFlow !== undefined && grpcFlow.trim().length > 0) {
+      try {
+        const grpc = YamlMerger.parseRestrictedFlowMap(grpcFlow,
+          new Set<string>(['grpc-service-name']));
+        const g = grpc.get('grpc-service-name');
+        if (g !== undefined && g.length > 0) {
+          p.grpcServiceName = YamlMerger.decodeScalar(g);
+        }
+      } catch (e) {
+        // 结构异常按「未提供」降级
+      }
+    }
+    if (p.grpcServiceName.length === 0) {
+      const grpcBlock = YamlMerger.extractBlockBody(itemLines, 'grpc-opts');
+      if (grpcBlock.length > 0) {
+        const m = YamlMerger.parseSimpleBlock(grpcBlock, new Set<string>(['grpc-service-name']));
+        const g = m.get('grpc-service-name');
+        if (g !== undefined && g.length > 0) {
+          p.grpcServiceName = g;
+        }
+      }
     }
   }
 
@@ -337,9 +626,170 @@ export class YamlMerger {
     }
   }
 
+  /** mihomo 原生支持、但本客户端无结构化槽位的协议: 校验后整条中继, 不丢弃。 */
+  private static readonly RELAY_TYPES: Set<string> = new Set<string>([
+    'tuic', 'hysteria', 'http', 'socks5', 'snell', 'anytls', 'ssh', 'mieru', 'wireguard'
+  ]);
+
+  /** 支持 alpn 的协议 (ss/ssr 不支持 alpn 键) */
+  private static readonly ALPN_TYPES: Set<string> = new Set<string>([
+    'vless', 'vmess', 'trojan', 'hysteria2', 'hysteria', 'tuic', 'anytls'
+  ]);
+
+  /** 本轮解析因「协议不支持/缺关键字段」被跳过的节点统计, 供上层提示用户 */
+  static lastSkippedCount: number = 0;
+  static lastSkippedTypes: string = '';
+
+  static resetSkipStats(): void {
+    YamlMerger.lastSkippedCount = 0;
+    YamlMerger.lastSkippedTypes = '';
+  }
+
+  /** 登记一个被跳过的节点(按协议类型去重, 最多记 12 种) */
+  static noteSkipped(typeText: string): void {
+    YamlMerger.lastSkippedCount = YamlMerger.lastSkippedCount + 1;
+    const t = typeText.trim().length > 0 ? typeText.trim().toLowerCase() : 'unknown';
+    const seen = new Set<string>();
+    for (const it of YamlMerger.lastSkippedTypes.split(',')) {
+      if (it.length > 0) {
+        seen.add(it);
+      }
+    }
+    if (!seen.has(t) && seen.size < 12) {
+      seen.add(t);
+      YamlMerger.lastSkippedTypes = Array.from(seen).join(',');
+    }
+  }
+
+  /** 保留字检查: 中继协议没有结构化槽位, 全部字段走 extraOpts */
+  static isRelayType(type: string): boolean {
+    return YamlMerger.RELAY_TYPES.has(type.trim().toLowerCase());
+  }
+
+  /** 该协议是否支持 alpn 键 */
+  static supportsAlpn(type: string): boolean {
+    return YamlMerger.ALPN_TYPES.has(type.trim().toLowerCase());
+  }
+
+  /** SNI 键名方案: hysteria2/hysteria/tuic 用 sni, 其余用 servername */
+  static usesSniKey(type: string): boolean {
+    const t = type.trim().toLowerCase();
+    return t === 'hysteria2' || t === 'hysteria' || t === 'tuic';
+  }
+
+  /** 预读条目声明的 type(键顺序不定, 结构化映射前先判定是否走中继) */
+  private static peekType(text: string): string {
+    const m = text.match(/(?:^|[\s,{-])type\s*:\s*"?([A-Za-z0-9]{1,16})"?/);
+    return m === null ? '' : m[1].toLowerCase();
+  }
+
   /**
-   * 解析单个 proxies 条目。仅接受白名单标量及 reality/ws/grpc 白名单嵌套结构；
-   * 节点格式错误抛出 YamlNodeError，由 merge 跳过；全局限额仍抛出 YamlMergeError。
+   * 白名单外额外字段捕获: 键名受限、值长度受限、禁止换行与注释符; 容器值({...}/[...])
+   * 必须括号平衡且仅含安全字符 —— 防止破坏 flow-map 结构或注入额外配置行。
+   * 非法时返回 null(仅丢该键, 绝不影响节点其余部分)。
+   */
+  private static captureExtraOpt(key: string, rawValue: string): string | null {
+    if (!/^[a-z][a-z0-9-]{0,24}$/.test(key)) {
+      return null;
+    }
+    const raw = rawValue.trim();
+    if (raw.length === 0 || raw.length > 512 || raw.includes('\n') || raw.includes('\r')
+      || raw.includes('#')) {
+      return null;
+    }
+    if (raw.startsWith('{') || raw.startsWith('[')) {
+      let depth = 0;
+      for (let i = 0; i < raw.length; i++) {
+        const c = raw.charAt(i);
+        if (c === '{' || c === '[') {
+          depth = depth + 1;
+        } else if (c === '}' || c === ']') {
+          depth = depth - 1;
+          if (depth < 0) {
+            return null;
+          }
+        } else if (!/[A-Za-z0-9_ \t.,:\/=\-+"']/.test(c)) {
+          return null;
+        }
+      }
+      return depth === 0 ? raw : null;
+    }
+    try {
+      return YamlMerger.decodeScalar(raw);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /** extraOpts(JSON 数组) → 键值对列表; 结构异常返回空(不影响主流程) */
+  static parseExtraOpts(extraOpts: string): string[][] {
+    const out: string[][] = [];
+    if (extraOpts.length === 0) {
+      return out;
+    }
+    try {
+      const parsed = JSON.parse(extraOpts) as string[][];
+      if (Array.isArray(parsed)) {
+        for (const pair of parsed) {
+          if (Array.isArray(pair) && pair.length === 2
+            && typeof pair[0] === 'string' && typeof pair[1] === 'string') {
+            out.push([pair[0], pair[1]]);
+          }
+        }
+      }
+    } catch (e) {
+      return [];
+    }
+    return out;
+  }
+
+  /**
+   * 统一处理一个 key/value 对(flow-map 与块式两种写法共用):
+   * - 中继协议: 核心四字段入 fields, 其余全部键值经校验后进 extras(原样透传);
+   * - 结构化协议: 白名单键入 fields, 白名单外的安全键进 extras(不静默丢弃)。
+   */
+  private static applyPair(key: string, rawValue: string, relayMode: boolean,
+    supportedKeys: Set<string>, fields: Map<string, string>, extras: string[][],
+    extraSeen: Set<string>): void {
+    if (relayMode) {
+      if (key === 'name' || key === 'type' || key === 'server' || key === 'port') {
+        try {
+          fields.set(key, YamlMerger.decodeScalar(rawValue));
+        } catch (e) {
+          // 核心字段无法解析: 交由后续必需字段校验拒绝该节点
+        }
+      } else {
+        const captured = YamlMerger.captureExtraOpt(key, rawValue);
+        if (captured !== null) {
+          extraSeen.add(key);
+          extras.push([key, captured]);
+        }
+      }
+      return;
+    }
+    if (!supportedKeys.has(key)) {
+      const captured = YamlMerger.captureExtraOpt(key, rawValue);
+      if (captured !== null) {
+        extraSeen.add(key);
+        extras.push([key, captured]);
+      }
+      return;
+    }
+    if (key === 'reality-opts' || key === 'ws-opts' || key === 'grpc-opts' || key === 'alpn') {
+      fields.set(key, rawValue);
+    } else {
+      try {
+        fields.set(key, YamlMerger.decodeScalar(rawValue));
+      } catch (e) {
+        // 值解析失败, 跳过该字段
+      }
+    }
+  }
+
+  /**
+   * 解析单个 proxies 条目。结构化白名单标量走专用槽位; 白名单外的安全键进入 extraOpts
+   * 中继(不再静默丢弃)。节点格式错误抛出 YamlNodeError，由 merge 跳过；
+   * 全局限额仍抛出 YamlMergeError。
    */
   static parseProxyItem(itemLines: string[]): MergedProxy | null {
     const text = itemLines.join('\n').trim();
@@ -347,12 +797,19 @@ export class YamlMerger {
       throw new YamlMergeError('单个节点内容大小超过上限');
     }
     const fields = new Map<string, string>();
+    const extras: string[][] = [];
+    const extraSeen = new Set<string>();
+    // 中继协议(tuic/hysteria/http/socks5/...)无结构化槽位: 除核心四字段外全部原样透传,
+    // 避免键名映射差异(如 sni/servername、obfs-password)让 mihomo 收到错误的键。
+    const relayMode = YamlMerger.isRelayType(YamlMerger.peekType(text));
     const supportedKeys = new Set<string>([
       'name', 'type', 'server', 'port', 'cipher', 'password',
       'protocol', 'protocol-param', 'protocol_param', 'obfs', 'obfs-param', 'obfs_param',
       'uuid', 'alterId', 'alter-id', 'udp', 'network', 'tls', 'servername', 'sni',
       'skip-cert-verify', 'flow', 'client-fingerprint', 'reality-opts', 'ws-opts', 'grpc-opts',
-      'up', 'down', 'upmbps', 'downmbps', 'alpn', 'obfs-password', 'fingerprint'
+      'up', 'down', 'upmbps', 'downmbps', 'alpn', 'obfs-password', 'fingerprint',
+      // 部分面板不用 ws-opts 嵌套, 而是把 WS 参数平铺为顶层别名
+      'ws-path', 'ws-host', 'ws-headers'
     ]);
     const body = text.startsWith('- ') ? text.substring(2) : text;
     if (body.trimStart().startsWith('{')) {
@@ -373,21 +830,12 @@ export class YamlMerger {
         } catch (e) {
           continue;
         }
-        // 未知字段/重复字段一律忽略：真实 Clash YAML 常带 alpn、ip-version、tfo 等
-        // 白名单外字段, 不能因此丢弃整个可用节点。
-        if (key.length === 0 || !supportedKeys.has(key) || fields.has(key)) {
+        // 重复键忽略; 白名单外的安全键不再丢弃, 而是进入 extraOpts 中继。
+        if (key.length === 0 || fields.has(key) || extraSeen.has(key)) {
           continue;
         }
-        const rawValue = pair.substring(idx + 1).trim();
-        if (key === 'reality-opts' || key === 'ws-opts' || key === 'grpc-opts' || key === 'alpn') {
-          fields.set(key, rawValue);
-        } else {
-          try {
-            fields.set(key, YamlMerger.decodeScalar(rawValue));
-          } catch (e) {
-            // 值解析失败, 跳过该字段
-          }
-        }
+        YamlMerger.applyPair(key, pair.substring(idx + 1).trim(), relayMode, supportedKeys,
+          fields, extras, extraSeen);
       }
     } else {
       for (const line of itemLines) {
@@ -405,20 +853,12 @@ export class YamlMerger {
         } catch (e) {
           continue;
         }
-        // 未知/重复字段忽略, 不因白名单外字段丢弃可用节点
-        if (key.length === 0 || !supportedKeys.has(key) || fields.has(key)) {
+        // 重复键忽略; 白名单外的安全键不再丢弃, 而是进入 extraOpts 中继。
+        if (key.length === 0 || fields.has(key) || extraSeen.has(key)) {
           continue;
         }
-        const rawValue = t.substring(idx + 1).trim();
-        if (key === 'reality-opts' || key === 'ws-opts' || key === 'grpc-opts' || key === 'alpn') {
-          fields.set(key, rawValue);
-        } else {
-          try {
-            fields.set(key, YamlMerger.decodeScalar(rawValue));
-          } catch (e) {
-            // 值解析失败, 跳过该字段
-          }
-        }
+        YamlMerger.applyPair(key, t.substring(idx + 1).trim(), relayMode, supportedKeys,
+          fields, extras, extraSeen);
       }
     }
     const name = fields.get('name') ?? '';
@@ -429,7 +869,10 @@ export class YamlMerger {
       throw new YamlNodeError('代理节点缺少 name、type 或 server');
     }
     if (proxyType !== 'ss' && proxyType !== 'ssr' && proxyType !== 'vless'
-      && proxyType !== 'vmess' && proxyType !== 'trojan' && proxyType !== 'hysteria2') {
+      && proxyType !== 'vmess' && proxyType !== 'trojan' && proxyType !== 'hysteria2'
+      && !YamlMerger.RELAY_TYPES.has(proxyType)) {
+      // 记录被跳过的协议类型, 由订阅刷新流程提示用户(不再静默丢弃)
+      YamlMerger.noteSkipped(proxyType);
       throw new YamlNodeError(`不支持的代理类型：${proxyType}`);
     }
     if (!/^\d{1,5}$/.test(portStr)) {
@@ -473,13 +916,16 @@ export class YamlMerger {
       // hysteria2 的证书指纹(pinSHA256)键名是 fingerprint
       p.clientFingerprint = fields.get('fingerprint') ?? '';
     }
-    if (proxyType === 'hysteria2') {
+    if (proxyType === 'hysteria2' || proxyType === 'hysteria') {
       p.hyUp = YamlMerger.normalizeBandwidth(fields.get('up') ?? fields.get('upmbps') ?? '');
       p.hyDown = YamlMerger.normalizeBandwidth(fields.get('down') ?? fields.get('downmbps') ?? '');
+    }
+    if (YamlMerger.supportsAlpn(proxyType)) {
+      // alpn 不再只限 hysteria2: vless/vmess/trojan 的 ALPN 协商同样需要它
       p.alpnList = YamlMerger.normalizeAlpnList(fields.get('alpn') ?? '');
     }
     try {
-      YamlMerger.parseNestedOptions(fields, p);
+      YamlMerger.parseNestedOptions(fields, p, itemLines);
     } catch (e) {
       // reality-opts/ws-opts/grpc-opts 结构异常时忽略嵌套项, 不丢弃整个节点
       if (e instanceof YamlMergeError) {
@@ -493,6 +939,10 @@ export class YamlMerger {
     for (let i = 0; i < values.length; i++) {
       YamlMerger.validateNodeText(values[i], `field-${i}`);
     }
+    for (const pair of extras) {
+      YamlMerger.validateNodeText(pair[1], 'extra-value');
+    }
+    p.extraOpts = extras.length > 0 ? JSON.stringify(extras) : '';
     if ((p.type === 'ss' || p.type === 'ssr') && (p.cipher.length === 0 || p.password.length === 0)) {
       throw new YamlNodeError(`代理节点「${p.name}」缺少 cipher 或 password`);
     }
@@ -529,7 +979,8 @@ export class YamlMerger {
     if (cleaned.length === 0) {
       return '';
     }
-    return /^[A-Za-z0-9.,-]+$/.test(cleaned) ? cleaned : '';
+    // HTTP ALPN 标识通常包含斜杠（例如 http/1.1），不能按非法字符丢弃。
+    return /^[A-Za-z0-9.,\/-]+$/.test(cleaned) ? cleaned : '';
   }
 
   /** 内容指纹：除 name 外包含全部协议及白名单嵌套字段。 */
@@ -561,6 +1012,7 @@ export class YamlMerger {
     parts.push(`hyUp=${JSON.stringify(p.hyUp)}`);
     parts.push(`hyDown=${JSON.stringify(p.hyDown)}`);
     parts.push(`alpn=${JSON.stringify(p.alpnList)}`);
+    parts.push(`extra=${JSON.stringify(p.extraOpts)}`);
     return parts.join('|');
   }
 
@@ -608,8 +1060,8 @@ export class YamlMerger {
         fields.push('tls: true');
       }
       if (p.servername.length > 0) {
-        // hysteria2 的 SNI 键名是 sni（无 servername 选项）
-        fields.push(`${p.type === 'hysteria2' ? 'sni' : 'servername'}: ${YamlMerger.encodeScalar(p.servername)}`);
+        // hysteria2/hysteria/tuic 的 SNI 键名是 sni（无 servername 选项）
+        fields.push(`${YamlMerger.usesSniKey(p.type) ? 'sni' : 'servername'}: ${YamlMerger.encodeScalar(p.servername)}`);
       }
       if (p.skipCertVerify) {
         fields.push('skip-cert-verify: true');
@@ -620,19 +1072,23 @@ export class YamlMerger {
       if (p.clientFingerprint.length > 0) {
         fields.push(`${p.type === 'hysteria2' ? 'fingerprint' : 'client-fingerprint'}: ${YamlMerger.encodeScalar(p.clientFingerprint)}`);
       }
-      if (p.type === 'hysteria2') {
+      if (p.type === 'hysteria2' || p.type === 'hysteria') {
         if (p.hyUp.length > 0) {
           fields.push(`up: ${YamlMerger.encodeScalar(p.hyUp)}`);
         }
         if (p.hyDown.length > 0) {
           fields.push(`down: ${YamlMerger.encodeScalar(p.hyDown)}`);
         }
-        if (p.alpnList.length > 0) {
-          const items = p.alpnList.split(',');
-          const flowItems: string[] = [];
-          for (const it of items) {
+      }
+      if (p.alpnList.length > 0 && YamlMerger.supportsAlpn(p.type)) {
+        const items = p.alpnList.split(',');
+        const flowItems: string[] = [];
+        for (const it of items) {
+          if (it.length > 0) {
             flowItems.push(YamlMerger.encodeScalar(it));
           }
+        }
+        if (flowItems.length > 0) {
           fields.push(`alpn: [${flowItems.join(', ')}]`);
         }
       }
@@ -658,6 +1114,30 @@ export class YamlMerger {
       }
       if (p.grpcServiceName.length > 0) {
         fields.push(`grpc-opts: {grpc-service-name: ${YamlMerger.encodeScalar(p.grpcServiceName)}}`);
+      }
+      // extraOpts 中继(与 ClashConfigGenerator.proxyYamlLine 保持一致): 不在结构化槽位
+      // 内的键原样回写, 与已输出键重名时以结构化字段为准。
+      const emittedKeys = new Set<string>();
+      for (const f of fields) {
+        const ci = f.indexOf(':');
+        if (ci > 0) {
+          emittedKeys.add(f.substring(0, ci).trim());
+        }
+      }
+      for (const pair of YamlMerger.parseExtraOpts(p.extraOpts)) {
+        const key = pair[0];
+        const value = pair[1];
+        if (emittedKeys.has(key) || key === 'name' || key === 'type' || key === 'server'
+          || key === 'port' || !/^[a-z][a-z0-9-]{0,24}$/.test(key)) {
+          continue;
+        }
+        if (value.startsWith('{') || value.startsWith('[')
+          || value === 'true' || value === 'false' || /^-?[0-9]+(\.[0-9]+)?$/.test(value)) {
+          fields.push(`${key}: ${value}`);
+        } else {
+          fields.push(`${key}: ${YamlMerger.encodeScalar(value)}`);
+        }
+        emittedKeys.add(key);
       }
       lines.push(`  - {${fields.join(', ')}}`);
     }

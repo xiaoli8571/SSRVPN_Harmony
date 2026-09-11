@@ -121,6 +121,7 @@ struct HomePage {
   @State downSpeed: number = 0;
   @State upTotal: number = 0;
   @State downTotal: number = 0;
+  @State connectionDuration: number = 0;
   @State buttonPressed: boolean = false;
   /** 电源按钮直径: 按屏宽自适应(手机≈40% 宽, 平板封顶 210), 修复手机上比例失衡 */
   @State powerSize: number = 210;
@@ -131,9 +132,15 @@ struct HomePage {
   private orchestrator: ConnectionOrchestrator = ConnectionOrchestrator.instance();
   private subs: SubscriptionService = new SubscriptionService();
   private settings: AppSettings = new AppSettings();
-  /** 防止 onPageShow 反复执行时重复注册监听（单例 orchestrator 的 listeners 会跨页存活） */
+  private readonly connectionListener: () => void = (): void => {
+    this.applyOrchestratorState();
+  };
+  private readonly latencyListener: () => void = (): void => {
+    this.currentLatencyTick = this.currentLatencyTick + 1;
+  };
   private listenerBound: boolean = false;
   private latencyListenerBound: boolean = false;
+  private connectionTimer: number = -1;
   private aboutDialog: CustomDialogController = new CustomDialogController({
     builder: AboutDialog({})
   });
@@ -153,12 +160,78 @@ struct HomePage {
     this.bootstrap();
   }
 
+  aboutToDisappear(): void {
+    this.pageReady = false;
+    this.stopConnectionTimer();
+    if (this.listenerBound) {
+      this.orchestrator.removeListener(this.connectionListener);
+      this.listenerBound = false;
+    }
+    if (this.latencyListenerBound) {
+      LatencyController.removeListener(this.latencyListener);
+      this.latencyListenerBound = false;
+    }
+  }
+
+  private applyOrchestratorState(): void {
+    this.isConnected = this.orchestrator.state === ConnState.CONNECTED;
+    this.isConnecting = this.orchestrator.state === ConnState.CONNECTING
+      || this.orchestrator.state === ConnState.DISCONNECTING
+      || this.orchestrator.state === ConnState.RECOVERING;
+    this.errorMessage = this.orchestrator.lastError;
+    this.upSpeed = this.orchestrator.traffic.uploadSpeed;
+    this.downSpeed = this.orchestrator.traffic.downloadSpeed;
+    this.upTotal = this.orchestrator.traffic.uploadBytes;
+    this.downTotal = this.orchestrator.traffic.downloadBytes;
+    if (this.pageReady) {
+      this.syncConnectionTimer();
+    }
+    this.refreshDisplayNode();
+  }
+
+  private syncConnectionTimer(): void {
+    if (this.orchestrator.state !== ConnState.CONNECTED || this.orchestrator.startedAt <= 0) {
+      this.connectionDuration = 0;
+      this.stopConnectionTimer();
+      return;
+    }
+    this.connectionDuration = Math.max(0,
+      Math.floor((Date.now() - this.orchestrator.startedAt) / 1000));
+    if (this.connectionTimer >= 0) {
+      return;
+    }
+    this.connectionTimer = setInterval(() => {
+      if (this.orchestrator.state !== ConnState.CONNECTED || this.orchestrator.startedAt <= 0) {
+        this.connectionDuration = 0;
+        this.stopConnectionTimer();
+        return;
+      }
+      this.connectionDuration = Math.max(0,
+        Math.floor((Date.now() - this.orchestrator.startedAt) / 1000));
+    }, 1000);
+  }
+
+  private stopConnectionTimer(): void {
+    if (this.connectionTimer >= 0) {
+      clearInterval(this.connectionTimer);
+      this.connectionTimer = -1;
+    }
+  }
+
   private async bootstrap(): Promise<void> {
     const ctx = getContext(this) as Context;
     this.orchestrator.init(ctx);
     await SettingsService.init(ctx);
     await this.subs.init(ctx);
     this.settings = await SettingsService.load();
+    const authority = await this.orchestrator.authorityState();
+    const snapshot = await SettingsService.loadSnapshot();
+    if (authority.connected) {
+      this.orchestrator.state = ConnState.CONNECTED;
+      if (this.orchestrator.startedAt <= 0 && snapshot.startedAt > 0) {
+        this.orchestrator.startedAt = snapshot.startedAt;
+      }
+    }
     // 电源按钮随屏宽自适应: 手机(≈433vp)取 40% 宽 ≈ 173, 平板封顶 210
     try {
       const disp = display.getDefaultDisplaySync();
@@ -169,39 +242,22 @@ struct HomePage {
     }
     if (!this.listenerBound) {
       this.listenerBound = true;
-      this.orchestrator.listeners.push(() => {
-        this.isConnected = this.orchestrator.state === ConnState.CONNECTED;
-        this.isConnecting = this.orchestrator.state === ConnState.CONNECTING
-          || this.orchestrator.state === ConnState.DISCONNECTING
-          || this.orchestrator.state === ConnState.RECOVERING;
-        this.errorMessage = this.orchestrator.lastError;
-        this.upSpeed = this.orchestrator.traffic.uploadSpeed;
-        this.downSpeed = this.orchestrator.traffic.downloadSpeed;
-        this.upTotal = this.orchestrator.traffic.uploadBytes;
-        this.downTotal = this.orchestrator.traffic.downloadBytes;
-        this.refreshDisplayNode();
-      });
+      this.orchestrator.addListener(this.connectionListener);
     }
     if (!this.latencyListenerBound) {
       this.latencyListenerBound = true;
-      LatencyController.addListener(() => {
-        this.currentLatencyTick = this.currentLatencyTick + 1;
-      });
+      LatencyController.addListener(this.latencyListener);
     }
-    this.refreshDisplayNode();
     if (this.publicIp.length === 0) {
       await this.refreshPublicIp();
     }
     // 单例 orchestrator: 回到主页时立即同步真实状态(不依赖下一次 notify),
     // 已连接则 UI 直接显示"已连接", 也不会触发误重连。
-    this.isConnected = this.orchestrator.state === ConnState.CONNECTED;
-    this.isConnecting = this.orchestrator.state === ConnState.CONNECTING
-      || this.orchestrator.state === ConnState.DISCONNECTING
-      || this.orchestrator.state === ConnState.RECOVERING;
-    this.errorMessage = this.orchestrator.lastError;
+    this.applyOrchestratorState();
+    this.pageReady = true;
+    this.syncConnectionTimer();
     // 不再自动恢复连接: 打开应用保持断开状态, 由用户手动点击启动。
     // 冷启动时快捷方式/卡片请求可能先于页面就绪写入, 这里兜底消费一次。
-    this.pageReady = true;
     this.consumeVpnRequest();
   }
 
@@ -361,36 +417,53 @@ struct HomePage {
       Column() {
         Scroll() {
           Column({ space: 0 }) {
-            // ── 头部：关于 | SSRVPN | 使用教程 + 主题切换 ──
-            Row() {
-              Text('关于')
-                .fontSize(14).fontColor(Ui.textSecondary)
-                .padding({ left: 4, right: 4 })
-                .onClick(() => this.aboutDialog.open())
-              Blank()
+            // ── 头部：关于 | SSRVPN(绝对居中) | 使用教程 + 主题切换 ──
+            // 标题放在 Stack 里由系统居中，两侧操作项作为同一行的叠加层，
+            // 不再参与标题的水平定位（此前右侧按钮会把标题挤偏）。
+            //
+            // 设置入口按用户要求隐藏（功能默认开启，节点仍为手动选择）。
+            // pages/SettingsPage 与相关持久化字段保留，需要时把下方注释掉的
+            // 「⚙ 设置」按钮恢复即可随时启用。
+            Stack() {
               Text('SSRVPN')
                 .fontSize(26)
                 .fontWeight(FontWeight.Normal)
                 .fontColor(Ui.textPrimary)
                 .letterSpacing(0.4)
-              Blank()
-              Row({ space: 4 }) {
-                Text('使用教程')
+              Row() {
+                Text('关于')
                   .fontSize(14).fontColor(Ui.textSecondary)
                   .padding({ left: 4, right: 4 })
-                  .onClick(() => this.tutorialDialog.open())
-                Button() {
-                  SymbolGlyph($r('sys.symbol.sun_max'))
-                    .fontSize(20)
-                    .fontColor([Ui.textSecondary])
+                  .onClick(() => this.aboutDialog.open())
+                Blank()
+                Row({ space: 4 }) {
+                  Text('使用教程')
+                    .fontSize(14).fontColor(Ui.textSecondary)
+                    .padding({ left: 4, right: 4 })
+                    .onClick(() => this.tutorialDialog.open())
+                  Button() {
+                    SymbolGlyph($r('sys.symbol.sun_max'))
+                      .fontSize(20)
+                      .fontColor([Ui.textSecondary])
+                  }
+                  .width(40)
+                  .height(40)
+                  .borderRadius(20)
+                  .backgroundColor(Color.Transparent)
+                  .accessibilityText('切换浅色或深色主题')
+                  .onClick(() => this.toggleTheme())
+                  // 设置入口（默认隐藏，需要时取消注释即可恢复）
+                  // Text('⚙')
+                  //   .fontSize(20)
+                  //   .fontColor(Ui.textSecondary)
+                  //   .padding({ left: 4, right: 4 })
+                  //   .accessibilityText($r('app.string.settings_entry_accessibility'))
+                  //   .onClick(() => {
+                  //     router.pushUrl({ url: 'pages/SettingsPage' });
+                  //   })
                 }
-                .width(40)
-                .height(40)
-                .borderRadius(20)
-                .backgroundColor(Color.Transparent)
-                .accessibilityText('切换浅色或深色主题')
-                .onClick(() => this.toggleTheme())
               }
+              .width('100%')
             }
             .width('100%')
             .height(48)
@@ -428,16 +501,16 @@ struct HomePage {
             // ── 当前节点卡 ──
             this.CurrentNodeCard()
 
-            // ── 数据面板: 三格横排(上传速率/下载速率/本次累计), 常驻显示。
+            // ── 数据面板: 四格横排(上传速率/下载速率/本次累计/连接时间), 常驻显示。
             // 直接内联在 build() 内: @Builder 值传参没有状态观察,
             // 真机实测 @State 变化不刷新独立 builder, 面板会永远停在 0。 ──
             Blank().height(14)
-            Row({ space: 10 }) {
+            Row({ space: 6 }) {
               Column({ space: 4 }) {
-                Row({ space: 5 }) {
-                  Text('↑').fontSize(13).fontColor(Ui.textBlue)
+                Row({ space: 3 }) {
+                  Text('↑').fontSize(12).fontColor(Ui.textBlue)
                   Text(this.formatSpeedValue(this.upSpeed))
-                    .fontSize(15).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
+                    .fontSize(12).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
                     .maxLines(1)
                 }
                 .alignItems(VerticalAlign.Center)
@@ -453,10 +526,10 @@ struct HomePage {
               .borderColor(Ui.border)
 
               Column({ space: 4 }) {
-                Row({ space: 5 }) {
-                  Text('↓').fontSize(13).fontColor(Ui.success)
+                Row({ space: 3 }) {
+                  Text('↓').fontSize(12).fontColor(Ui.success)
                   Text(this.formatSpeedValue(this.downSpeed))
-                    .fontSize(15).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
+                    .fontSize(12).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
                     .maxLines(1)
                 }
                 .alignItems(VerticalAlign.Center)
@@ -472,14 +545,29 @@ struct HomePage {
               .borderColor(Ui.border)
 
               Column({ space: 4 }) {
-                Row({ space: 5 }) {
-                  Text('Σ').fontSize(13).fontColor(Ui.accent)
+                Row({ space: 3 }) {
+                  Text('Σ').fontSize(12).fontColor(Ui.accent)
                   Text(this.formatBytesValue(this.upTotal + this.downTotal))
-                    .fontSize(15).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
+                    .fontSize(12).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
                     .maxLines(1)
                 }
                 .alignItems(VerticalAlign.Center)
                 Text('本次累计').fontSize(11).fontColor(Ui.textSecondary)
+              }
+              .alignItems(HorizontalAlign.Center)
+              .justifyContent(FlexAlign.Center)
+              .layoutWeight(1)
+              .padding({ top: 12, bottom: 12 })
+              .borderRadius(14)
+              .backgroundColor(Ui.surfaceMuted)
+              .borderWidth(1)
+              .borderColor(Ui.border)
+
+              Column({ space: 4 }) {
+                Text(this.formatConnectionDuration(this.connectionDuration))
+                  .fontSize(11).fontWeight(FontWeight.Bold).fontColor(Ui.textPrimary)
+                  .maxLines(1)
+                Text('连接时间').fontSize(11).fontColor(Ui.textSecondary)
               }
               .alignItems(HorizontalAlign.Center)
               .justifyContent(FlexAlign.Center)
@@ -549,7 +637,7 @@ struct HomePage {
             },
             onClose: () => { this.showDiagnostics = false; }
           })
-            .height('55%')
+            .height('78%')
         }
         .width('100%').height('100%')
         .backgroundColor(Ui.overlay)
@@ -626,6 +714,16 @@ struct HomePage {
       return `${kb.toFixed(1)} KB/s`;
     }
     return `${(kb / 1024).toFixed(1)} MB/s`;
+  }
+
+  private formatConnectionDuration(totalSeconds: number): string {
+    const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+    const days = Math.floor(safeSeconds / 86400);
+    const hours = Math.floor((safeSeconds % 86400) / 3600);
+    const minutes = Math.floor((safeSeconds % 3600) / 60);
+    const seconds = safeSeconds % 60;
+    const time = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    return days > 0 ? `${days}d ${time}` : time;
   }
 
   private formatBytesValue(bytes: number): string {

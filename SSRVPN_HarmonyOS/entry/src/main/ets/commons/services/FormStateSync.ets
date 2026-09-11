@@ -13,6 +13,7 @@ import { SubscriptionService } from './SubscriptionService';
 import { ProxyNode } from '../models/ProxyNode';
 import { AppLogger } from '../utils/AppLogger';
 import { FormInfoMetrics } from './FormInfoMetrics';
+import { SsrvpnNotifier } from './SsrvpnNotifier';
 
 const TAG = 'FormStateSync';
 const FORM_PREF = 'ssrvpn_forms';
@@ -21,6 +22,8 @@ const FORM_RECORDS_KEY = 'form_records';
 export const TOGGLE_FORM_NAME = 'SsrvpnToggleCard';
 export const INFO_FORM_NAME = 'SsrvpnInfoCard';
 const INFO_REFRESH_INTERVAL_MS = 5000;
+/** 权威对账间隔：内核崩溃/心跳超时后最长 3s 内卡片即变为已断开 */
+const RECONCILE_INTERVAL_MS = 3000;
 
 class FormRecord {
   formId: string = '';
@@ -59,6 +62,9 @@ export class FormStateSync {
   /** 仅有信息卡片登记时运行的低频指标刷新器。 */
   private static infoRefreshTimer: number = -1;
   private static infoRefreshContext: Context | null = null;
+  /** 权威对账定时器：卡片进程存活期间持续把真实状态纠偏回全部卡片。 */
+  private static reconcileTimer: number = -1;
+  private static reconcileContext: Context | null = null;
 
   static disconnected(nodeName: string = ''): FormStateSnapshot {
     return FormStateSync.createSnapshot(FormStateCode.DISCONNECTED, nodeName);
@@ -90,7 +96,9 @@ export class FormStateSync {
 
   /**
    * 为 onAddForm 的同步返回提供即时状态。只读取进程状态和本地心跳，
-   * 不执行异步初始化；完整节点信息由随后的 calibrate() 回填。
+   * 不执行异步初始化；完整权威判定由随后的 calibrate()/reconcile() 回填。
+   * 注意：这里绝不凭进程内 state 报"已连接" —— 新进程 state 恒为 DISCONNECTED，
+   * 唯一可信证据是心跳新鲜/存活标记。
    */
   static immediate(context: Context): FormStateSnapshot {
     const orchestrator = ConnectionOrchestrator.instance();
@@ -104,7 +112,8 @@ export class FormStateSync {
     if (orchestrator.state === ConnState.RECOVERING) {
       return FormStateSync.recovering('');
     }
-    if (orchestrator.isTunnelAlive()) {
+    // 心跳新鲜或存活标记存在 = 内核确实在跑（与持久化意图一致地报已连接）。
+    if (orchestrator.state === ConnState.CONNECTED || orchestrator.isTunnelAlive()) {
       return FormStateSync.connected('');
     }
     if (orchestrator.lastError.length > 0) {
@@ -129,6 +138,7 @@ export class FormStateSync {
       const orchestrator = ConnectionOrchestrator.instance();
       orchestrator.init(context);
 
+      // 进行中的显式过渡态优先（避免连接/断开中途闪烁为终态）
       if (orchestrator.state === ConnState.CONNECTING) {
         return FormStateSync.connecting(nodeName);
       }
@@ -138,11 +148,18 @@ export class FormStateSync {
       if (orchestrator.state === ConnState.RECOVERING) {
         return FormStateSync.recovering(nodeName);
       }
-      if (orchestrator.isTunnelAlive()) {
+      // 权威判定：持久化意图 ∧ 内核存活证据。内核退出/心跳超时 → 立即已断开。
+      const authority = await orchestrator.authorityState();
+      if (authority.connected) {
         return FormStateSync.connected(nodeName);
       }
       if (selected === null) {
         return FormStateSync.noNode();
+      }
+      // 用户期望连接但内核已死：明确报"已断开"，不再残留「已连接/断开」按钮。
+      if (authority.desiredConnected) {
+        AppLogger.warn(TAG, `tunnel lost (${authority.reason}); publishing disconnected`);
+        return FormStateSync.disconnected(nodeName);
       }
       if (orchestrator.lastError.length > 0) {
         return FormStateSync.failed(nodeName);
@@ -152,6 +169,23 @@ export class FormStateSync {
       AppLogger.warn(TAG, `calibrate failed: ${error instanceof Error ? error.message : String(error)}`);
       return FormStateSync.disconnected();
     }
+  }
+
+  /**
+   * 权威状态对账：任何一个入口（卡片冷启动/页面 onPageShow/通知刷新）都可调用。
+   * 它把"持久化意图 + 内核存活证据"算出的真实状态广播给全部卡片，并在内核
+   * 退出 / 心跳超时 / 用户已断开时立即把卡片更新为已断开，同时撤销常驻通知 ——
+   * 这是卡片路径进程（QuickToggleAbility 自毁后）唯一仍能持续纠偏的通道。
+   */
+  static async reconcile(context: Context): Promise<FormStateSnapshot> {
+    const snapshot = await FormStateSync.calibrate(context);
+    await FormStateSync.publish(context, snapshot);
+    if (snapshot.stateCode !== FormStateCode.CONNECTED) {
+      // 隧道已不可用：撤销常驻通知，避免"卡片已断开但通知还挂着"。
+      SsrvpnNotifier.cancel().catch((): void => {
+      });
+    }
+    return snapshot;
   }
 
   /** EntryFormAbility 新增卡片时按 formId/formName 登记。 */
@@ -204,7 +238,20 @@ export class FormStateSync {
   /** 广播结构化状态到全部登记卡片。 */
   static publish(context: Context, snapshot: FormStateSnapshot): Promise<void> {
     const task = FormStateSync.publishTail.then(async (): Promise<void> => {
-      const records = await FormStateSync.readFormRecords(context);
+      let records: FormRecord[] = [];
+      try {
+        records = await FormStateSync.readFormRecords(context);
+      } catch (error) {
+        AppLogger.warn(TAG,
+          `read form records failed: ${error instanceof Error ? error.message : String(error)}`);
+        return;
+      }
+      if (records.length === 0) {
+        // headless 路径（快捷方式/卡片进程）且没有任何登记卡片时，
+        // 完全不要触碰 FormKit 这类 UI-only API —— 无卡片可更新，
+        // 徒增 js_form_provider 噪声与无界面进程里的窗口/表单耦合风险。
+        return;
+      }
       const invalidIds: string[] = [];
       let infoSnapshot: FormStateSnapshot | null = null;
       for (const record of records) {
@@ -299,6 +346,41 @@ export class FormStateSync {
       FormStateSync.infoRefreshTimer = -1;
     }
     FormStateSync.infoRefreshContext = null;
+    FormStateSync.stopReconcile();
+  }
+
+  /**
+   * 启动权威对账定时器（卡片进程保活期间的有效纠偏通道）。
+   * 卡片路径连接后 QuickToggleAbility 自毁，UI 侧监控随之消失；只要
+   * EntryFormAbility 进程仍在，本定时器就按 3s 周期重算权威状态 —— 内核退出 /
+   * 心跳超时后立即把卡片与通知更新为已断开（修复"卡片仍显示已连接"）。
+   */
+  static startReconcile(context: Context): void {
+    FormStateSync.reconcileContext = context;
+    if (FormStateSync.reconcileTimer >= 0) {
+      return;
+    }
+    FormStateSync.reconcileTimer = setInterval((): void => {
+      const active = FormStateSync.reconcileContext;
+      if (active === null) {
+        return;
+      }
+      FormStateSync.reconcile(active).catch((error: Error): void => {
+        AppLogger.warn(TAG, `reconcile failed: ${error.message}`);
+      });
+    }, RECONCILE_INTERVAL_MS);
+  }
+
+  static stopReconcile(): void {
+    if (FormStateSync.reconcileTimer >= 0) {
+      clearInterval(FormStateSync.reconcileTimer);
+      FormStateSync.reconcileTimer = -1;
+    }
+    FormStateSync.reconcileContext = null;
+  }
+
+  static isReconcileRunning(): boolean {
+    return FormStateSync.reconcileTimer >= 0;
   }
 
   private static reconcileInfoRefresh(context: Context, records: FormRecord[]): void {

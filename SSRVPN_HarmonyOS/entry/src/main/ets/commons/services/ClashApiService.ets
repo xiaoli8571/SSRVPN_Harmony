@@ -27,6 +27,29 @@ export class ClashApiService {
   private apiPort: number = 9090;
   private secret: string = '';
 
+  /**
+   * 在途延迟测试请求集合。
+   * 批量测速会同时挂起 N 路 /proxies/{name}/delay；页面退出或新批次开始时若只靠
+   * 逻辑标志位，内核侧这些出站连接仍会跑到各自超时（最长 2.5~5s）继续占用通道，
+   * 表现为「旧批次和新批次抢通道、整体变慢」。cancelInflight() 直接 destroy 掉
+   * 在途请求，通道立刻释放。
+   */
+  private inflight: Set<http.HttpRequest> = new Set<http.HttpRequest>();
+
+  /** 中断所有在途延迟测试请求，返回被中断的数量（其余业务请求不受影响）。 */
+  cancelInflight(): number {
+    const n = this.inflight.size;
+    for (const req of this.inflight) {
+      try {
+        req.destroy();
+      } catch (e) {
+        // 已结束的请求 destroy 抛错属正常
+      }
+    }
+    this.inflight.clear();
+    return n;
+  }
+
   setEndpoint(port: number, secret: string): void {
     this.apiPort = port;
     this.secret = secret;
@@ -145,13 +168,16 @@ export class ClashApiService {
   /** 延迟测试（对应 clash_service_latency_support）：GET /proxies/{name}/delay */
   async testLatency(nodeName: string, testUrl: string, timeoutMs: number = 5000): Promise<number> {
     const req = http.createHttp();
+    this.inflight.add(req);
     try {
+      const outerTimeoutMs = timeoutMs + 2000;
+      const startedAt = Date.now();
       const resp = await req.request(
         `${this.baseUrl()}/proxies/${encodeURIComponent(nodeName)}/delay?url=${encodeURIComponent(testUrl)}&timeout=${timeoutMs}`, {
         method: http.RequestMethod.GET,
         header: this.authHeader(),
-        connectTimeout: timeoutMs,
-        readTimeout: timeoutMs,
+        connectTimeout: outerTimeoutMs,
+        readTimeout: outerTimeoutMs,
         usingCache: false
       });
       let body: string = '';
@@ -160,15 +186,35 @@ export class ClashApiService {
       } else if (resp.result instanceof ArrayBuffer) {
         body = util.TextDecoder.create('utf-8').decodeToString(new Uint8Array(resp.result));
       }
-      if (resp.responseCode === 200 && body.length > 0) {
+      if (resp.responseCode !== 200) {
+        AppLogger.warn(TAG, `latency non-200: code=${resp.responseCode} bodyLen=${body.length} `
+          + `innerTimeout=${timeoutMs} outerTimeout=${outerTimeoutMs} elapsed=${Date.now() - startedAt}ms`);
+        return -1;
+      }
+      if (body.length === 0) {
+        AppLogger.warn(TAG, `latency empty response: innerTimeout=${timeoutMs} outerTimeout=${outerTimeoutMs} `
+          + `elapsed=${Date.now() - startedAt}ms`);
+        return -1;
+      }
+      try {
         const json = JSON.parse(body) as Record<string, number>;
         const delay = json['delay'];
-        return delay !== undefined ? delay : -1;
+        if (delay !== undefined) {
+          return delay;
+        }
+        AppLogger.warn(TAG, `latency response missing delay: bodyLen=${body.length} `
+          + `elapsed=${Date.now() - startedAt}ms`);
+      } catch (jsonError) {
+        AppLogger.warn(TAG, `latency JSON error: bodyLen=${body.length} error=${this.errText(jsonError)} `
+          + `elapsed=${Date.now() - startedAt}ms`);
       }
       return -1;
     } catch (e) {
+      AppLogger.warn(TAG, `latency request error: innerTimeout=${timeoutMs} outerTimeout=${timeoutMs + 2000} `
+        + `error=${this.errText(e)}`);
       return -1;
     } finally {
+      this.inflight.delete(req);
       req.destroy();
     }
   }

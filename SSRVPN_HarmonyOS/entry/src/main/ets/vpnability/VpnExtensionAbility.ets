@@ -26,6 +26,7 @@ import wantAgent from '@ohos.app.ability.wantAgent';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { coreBridge } from '../core/CoreBridge';
 import { AppLogger } from '../commons/utils/AppLogger';
+import { BusinessError } from '@kit.BasicServicesKit';
 
 const TAG = 'VpnExtensionAbility';
 const VPN_MTU = 1400;
@@ -58,14 +59,46 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
   private backgroundRunning: boolean = false;
   /** 统一清理的幂等门控。 */
   private cleanupPromise: Promise<void> | null = null;
+  /** 本次会话的配置路径（onDestroy 时删除含 API secret 的 YAML） */
+  private configPathForCleanup: string = '';
+  /** 该配置是否为临时测速配置（由 UI 侧生成为 mihomo_test_config.yaml） */
+  private configIsTransient: boolean = false;
+
+  /**
+   * 删除含凭据的运行时配置。每个文件独立容错，缺失即跳过。
+   * @param force 内核启动失败/无头测速失败时即使不是临时配置也删除
+   */
+  private removePrivateConfig(force: boolean): void {
+    if (this.configPathForCleanup.length === 0) {
+      return;
+    }
+    if (!force && !this.configIsTransient) {
+      return;
+    }
+    try {
+      fs.unlinkSync(this.configPathForCleanup);
+    } catch (e) {
+      // 已被 UI 侧删除属正常
+    }
+  }
+
+  /** 判断配置是否为测速用临时文件（UI 侧命名约定） */
+  private static isTransientConfig(path: string): boolean {
+    return path.endsWith('mihomo_test_config.yaml');
+  }
+
   /** 把扩展进程内的启动失败原因写回 UI 可读的目录（跨进程无法直接共享内存） */
   private reportStartError(configPath: string, message: string): void {
     try {
       const dir = configPath.substring(0, configPath.lastIndexOf('/'));
       const file = fs.openSync(`${dir}/${START_ERROR_FILE}`,
         fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
-      fs.writeSync(file.fd, message);
-      fs.closeSync(file);
+      try {
+        fs.writeSync(file.fd, message);
+      } finally {
+        // 写入失败也必须释放 fd（此前 writeSync 抛错会泄漏句柄）
+        fs.closeSync(file);
+      }
     } catch (e) {
       AppLogger.warn(TAG, `write start error file failed: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -77,21 +110,26 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
       const dir = configPath.substring(0, configPath.lastIndexOf('/'));
       const file = fs.openSync(`${dir}/${START_OK_FILE}`,
         fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
-      fs.writeSync(file.fd, `${Date.now()}`);
-      fs.closeSync(file);
+      try {
+        fs.writeSync(file.fd, `${Date.now()}`);
+      } finally {
+        fs.closeSync(file);
+      }
     } catch (e) {
       AppLogger.warn(TAG, `write start ok file failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
   private clearStartError(configPath: string): void {
-    try {
-      const dir = configPath.substring(0, configPath.lastIndexOf('/'));
-      fs.unlinkSync(`${dir}/${START_ERROR_FILE}`);
-      fs.unlinkSync(`${dir}/${START_OK_FILE}`);
-      fs.unlinkSync(`${dir}/${HEARTBEAT_FILE}`);
-    } catch (e) {
-      // 文件不存在属正常
+    const dir = configPath.substring(0, configPath.lastIndexOf('/'));
+    const targets: string[] = [START_ERROR_FILE, START_OK_FILE, HEARTBEAT_FILE];
+    // 逐文件独立容错：一个文件不存在不得阻止其余文件删除
+    for (const name of targets) {
+      try {
+        fs.unlinkSync(`${dir}/${name}`);
+      } catch (e) {
+        // 文件不存在属正常
+      }
     }
   }
 
@@ -104,8 +142,11 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
       try {
         const file = fs.openSync(`${dir}/${HEARTBEAT_FILE}`,
           fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
-        fs.writeSync(file.fd, `${Date.now()}`);
-        fs.closeSync(file);
+        try {
+          fs.writeSync(file.fd, `${Date.now()}`);
+        } finally {
+          fs.closeSync(file);
+        }
       } catch (e) {
         AppLogger.warn(TAG, `heartbeat write failed: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -180,6 +221,8 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
         // 已被 UI 侧删除属正常
       }
     }
+    // 临时测速配置随扩展退出删除（无头测速无 TUN，配置不会被内核长期需要）
+    this.removePrivateConfig(false);
     try {
       await coreBridge.stopCore();
     } catch (e) {
@@ -210,6 +253,9 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
     try {
       const entryWant: Want = {
         bundleName: 'com.ssrvpn.client',
+        // moduleName 缺失会让 wantAgent 校验失败（16000151 invalid wantAgent），
+        // 导致 TASK_KEEPING 永远起不来、扩展进程可被系统回收。
+        moduleName: 'entry',
         abilityName: 'EntryAbility'
       };
       const agentRequest: wantAgent.WantAgentInfo = {
@@ -222,8 +268,13 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
       await backgroundTaskManager.startBackgroundRunning(this.context,
         backgroundTaskManager.BackgroundMode.TASK_KEEPING, agent);
       this.backgroundRunning = true;
+      AppLogger.info(TAG, 'background task started (TASK_KEEPING)');
     } catch (e) {
-      AppLogger.warn(TAG, 'background task start failed');
+      const err = e as BusinessError;
+      // 记录真实错误码：16000151=invalid wantAgent、201=权限被拒、
+      // 9800005/其它=系统策略拒绝（例如通知被禁用时长时任务可能被拒）。
+      AppLogger.warn(TAG,
+        `background task start failed: code=${err.code} msg=${err.message}`);
     }
 
     const params = want.parameters;
@@ -232,6 +283,8 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
       configPath = `${this.context.cacheDir}/mihomo_config.yaml`;
       AppLogger.warn(TAG, 'config path missing; using cache configuration');
     }
+    this.configPathForCleanup = configPath;
+    this.configIsTransient = SsrvpnVpnExtension.isTransientConfig(configPath);
     this.clearStartError(configPath);
 
     // 重入防护：进程复用导致旧连接仍在时先销毁（避免 create 报 2200002 already exist）
@@ -360,6 +413,8 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
       const msg = e instanceof Error ? e.message : String(e);
       this.reportStartError(configPath, `VPN 扩展启动异常: ${msg}`);
       AppLogger.error(TAG, `vpn onCreate failed: ${msg}`);
+      // 启动失败即为本次会话终结：删掉含 API secret 的配置，避免凭据滞留磁盘
+      this.removePrivateConfig(true);
       await this.cleanupResources();
     }
   }
@@ -379,6 +434,9 @@ export default class SsrvpnVpnExtension extends VpnExtensionAbility {
       const msg = e instanceof Error ? e.message : String(e);
       this.reportStartError(configPath, `测速内核启动失败: ${msg}`);
       AppLogger.error(TAG, `headless start failed: ${msg}`);
+      // 失败路径不留残余：删除测速配置与启动标记文件
+      this.clearStartError(configPath);
+      this.removePrivateConfig(true);
       await this.cleanupResources();
     }
   }

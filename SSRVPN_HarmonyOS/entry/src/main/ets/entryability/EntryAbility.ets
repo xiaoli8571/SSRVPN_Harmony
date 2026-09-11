@@ -9,10 +9,15 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { SettingsService } from '../commons/services/SettingsService';
 import { AppLogger } from '../commons/utils/AppLogger';
 import { ThemeService } from '../theme/ThemeService';
+import { clearPrivateArtifacts } from '../commons/services/RuntimeFilePolicy';
+import { privateFs } from '../commons/services/PrivateFileStore';
 
 const TAG = 'EntryAbility';
 
 export default class EntryAbility extends UIAbility {
+  private pendingMode: string = '';
+  private windowReady: boolean = false;
+
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     AppLogger.info(TAG, 'onCreate');
     ThemeService.init(this.context).catch((e: BusinessError) => {
@@ -21,12 +26,17 @@ export default class EntryAbility extends UIAbility {
     SettingsService.init(this.context).catch((e: BusinessError) => {
       AppLogger.error(TAG, `settings init failed: ${e.message}`);
     });
-    this.handleWants(want);
+    this.captureWant(want);
   }
 
   /** 应用已在前台/后台存活时, 快捷方式与卡片点击走这里 */
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
-    this.handleWants(want);
+    this.captureWant(want);
+  }
+
+  /** 任务栈复用或后台恢复时再次投递尚未消费的快捷意图。 */
+  onForeground(): void {
+    this.publishPendingWant();
   }
 
   /**
@@ -36,7 +46,7 @@ export default class EntryAbility extends UIAbility {
    * 通过 AppStorage 递增 seq + mode 交给 HomePage 消费（前台 @Watch 即时响应,
    * 冷启动由 onPageShow 兜底消费）。
    */
-  private handleWants(want: Want): void {
+  private captureWant(want: Want): void {
     let mode = '';
     if (want.parameters && want.parameters['vpn_shortcut'] === 'start') {
       mode = 'start';
@@ -46,6 +56,17 @@ export default class EntryAbility extends UIAbility {
     if (mode.length === 0) {
       return;
     }
+    // 单槽保留最后一次有效请求。页面未挂载或 Ability 正在恢复时不丢失意图。
+    this.pendingMode = mode;
+    this.publishPendingWant();
+  }
+
+  private publishPendingWant(): void {
+    if (!this.windowReady || this.pendingMode.length === 0) {
+      return;
+    }
+    const mode = this.pendingMode;
+    this.pendingMode = '';
     AppStorage.setOrCreate('vpn_request_mode', mode);
     const seq = (AppStorage.get<number>('vpn_request_seq') ?? 0) + 1;
     AppStorage.setOrCreate('vpn_request_seq', seq);
@@ -59,6 +80,8 @@ export default class EntryAbility extends UIAbility {
           hilog.error(0x0, TAG, 'loadContent failed: %{public}s', JSON.stringify(err));
           return;
         }
+        this.windowReady = true;
+        this.publishPendingWant();
         windowStage.getMainWindow((err2, win) => {
           if (!err2.code) {
             ThemeService.syncSystemBars(win).catch(() => {});
@@ -68,11 +91,26 @@ export default class EntryAbility extends UIAbility {
       });
     }).catch((e: BusinessError) => {
       AppLogger.error(TAG, `theme restore failed: ${e.message}`);
-      windowStage.loadContent('pages/HomePage');
+      windowStage.loadContent('pages/HomePage', (err) => {
+        if (!err.code) {
+          this.windowReady = true;
+          this.publishPendingWant();
+        }
+      });
     });
   }
 
   onDestroy(): void {
     AppLogger.info(TAG, 'onDestroy');
+    // 应用退出：删除含 API secret / 节点口令的运行时配置与隧道状态文件。
+    // 逐文件独立容错；隧道仍在运行时无法删除（内核持有），由下次断开时补删。
+    try {
+      const removed = clearPrivateArtifacts(this.context.cacheDir, privateFs);
+      if (removed.length > 0) {
+        AppLogger.info(TAG, `runtime artifacts cleared on exit: ${removed.join(',')}`);
+      }
+    } catch (e) {
+      AppLogger.warn(TAG, `exit cleanup failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 }

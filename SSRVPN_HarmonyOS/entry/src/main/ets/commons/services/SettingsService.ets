@@ -22,6 +22,8 @@ export class ConnectionSnapshot {
   desiredConnected: boolean = false;
   nodeName: string = '';
   savedAt: number = 0;
+  /** 本次真实 VPN 会话开始时刻；旧快照缺少此字段时按 0 兼容。 */
+  startedAt: number = 0;
 }
 
 export class SettingsService {
@@ -51,7 +53,10 @@ export class SettingsService {
     if (SettingsService.store === null) {
       return;
     }
-    await SettingsService.store.put(KEY_SETTINGS, JSON.stringify(settings.toJson()));
+    // 保存前经 fromJson(toJson()) 归一化：非法值夹取、缺字段补默认，
+    // 保证「保存两次 = 同一 JSON」（幂等），且不回写脏值。
+    const normalized = AppSettings.fromJson(settings.toJson());
+    await SettingsService.store.put(KEY_SETTINGS, JSON.stringify(normalized.toJson()));
     await SettingsService.store.flush();
   }
 
@@ -123,6 +128,7 @@ export class SettingsService {
       snap.desiredConnected = j.desiredConnected;
       snap.nodeName = j.nodeName;
       snap.savedAt = j.savedAt;
+      snap.startedAt = typeof j.startedAt === 'number' && j.startedAt > 0 ? j.startedAt : 0;
     } catch (e) {
       // 快照损坏则视为空
     }

@@ -10,6 +10,7 @@
  */
 import { ProxyNode, ProxyNodeType } from '../models/ProxyNode';
 import { AppSettings } from '../models/AppSettings';
+import { YamlMerger } from './YamlMerger';
 
 export class ClashConfigGenerator {
   static generate(selectedNode: ProxyNode, allNodes: ProxyNode[], settings: AppSettings,
@@ -151,7 +152,8 @@ export class ClashConfigGenerator {
     const proxyType = n.type === ProxyNodeType.SSR ? 'ssr'
       : (n.type === ProxyNodeType.SS ? 'ss' : n.proxyType.toLowerCase());
     if (proxyType !== 'ss' && proxyType !== 'ssr' && proxyType !== 'vless'
-      && proxyType !== 'vmess' && proxyType !== 'trojan' && proxyType !== 'hysteria2') {
+      && proxyType !== 'vmess' && proxyType !== 'trojan' && proxyType !== 'hysteria2'
+      && !YamlMerger.isRelayType(proxyType)) {
       return '';
     }
     const textValues: string[] = [n.name, n.server, n.password, n.method, n.protocol, n.protocolParam,
@@ -195,7 +197,10 @@ export class ClashConfigGenerator {
     if (proxyType === 'ss' || proxyType === 'ssr' || proxyType === 'vmess') {
       fields.push(`cipher: ${q(n.method.length > 0 ? n.method : 'auto')}`);
     }
-    if (proxyType === 'ss' || proxyType === 'ssr' || proxyType === 'trojan' || proxyType === 'hysteria2') {
+    if (proxyType === 'ss' || proxyType === 'ssr' || proxyType === 'trojan'
+      || proxyType === 'hysteria2' || (proxyType !== 'vless' && proxyType !== 'vmess'
+        && n.password.length > 0)) {
+      // 口令类协议: vless/vmess 用 uuid, 其余(含 tuic/hysteria/socks5/http)用 password
       fields.push(`password: ${q(n.password)}`);
     }
     if (proxyType === 'ssr') {
@@ -204,7 +209,8 @@ export class ClashConfigGenerator {
       fields.push(`obfs: ${q(n.obfs)}`);
       fields.push(`obfs-param: ${q(n.obfsParam)}`);
     }
-    if (proxyType === 'vless' || proxyType === 'vmess') {
+    if ((proxyType === 'vless' || proxyType === 'vmess' || proxyType === 'tuic')
+      && n.uuid.length > 0) {
       fields.push(`uuid: ${q(n.uuid)}`);
     }
     if (proxyType === 'vmess') {
@@ -220,8 +226,8 @@ export class ClashConfigGenerator {
       fields.push('tls: true');
     }
     if (n.servername.length > 0) {
-      // hysteria2 的 SNI 键名是 sni（不支持 servername 键）
-      fields.push(`${proxyType === 'hysteria2' ? 'sni' : 'servername'}: ${q(n.servername)}`);
+      // hysteria2/hysteria/tuic 的 SNI 键名是 sni（不接受 servername 键）
+      fields.push(`${YamlMerger.usesSniKey(proxyType) ? 'sni' : 'servername'}: ${q(n.servername)}`);
     }
     if (n.skipCertVerify) {
       fields.push('skip-cert-verify: true');
@@ -246,16 +252,17 @@ export class ClashConfigGenerator {
       if (n.hyDown.length > 0) {
         fields.push(`down: ${q(n.hyDown)}`);
       }
-      if (n.alpnList.length > 0) {
-        const items: string[] = [];
-        for (const it of n.alpnList.split(',')) {
-          if (it.length > 0) {
-            items.push(q(it));
-          }
+    }
+    if (n.alpnList.length > 0 && YamlMerger.supportsAlpn(proxyType)) {
+      // alpn 不再只输出给 hysteria2: vless/vmess/trojan/tuic 同样需要 ALPN 协商
+      const items: string[] = [];
+      for (const it of n.alpnList.split(',')) {
+        if (it.length > 0) {
+          items.push(q(it));
         }
-        if (items.length > 0) {
-          fields.push(`alpn: [${items.join(', ')}]`);
-        }
+      }
+      if (items.length > 0) {
+        fields.push(`alpn: [${items.join(', ')}]`);
       }
     }
     if (n.realityPublicKey.length > 0 || n.realityShortId.length > 0) {
@@ -277,9 +284,49 @@ export class ClashConfigGenerator {
         ws.push(`headers: {Host: ${q(n.wsHost)}}`);
       }
       fields.push(`ws-opts: {${ws.join(', ')}}`);
+    } else if (n.network === 'ws') {
+      // 订阅未提供 ws-opts 的 WS 节点（典型：Cloudflare 隧道，servername 是
+      // xxx.trycloudflare.com 而 path/Host 留空）。mihomo 缺 ws-opts 时不会发
+      // 正确的 WebSocket Upgrade（无路径/无 Host），CF 直接拒绝 → 测速 503/
+      // 连上也不通。主流客户端（Clash Verge/v2rayN）对这类节点默认 path="/"、
+      // Host 取 SNI，这里对齐同样语义。仅对 network=ws 生效，不影响
+      // grpc/hysteria2/plain tcp 节点；订阅已给出 path/host 时走上面的分支原样保留。
+      const ws: string[] = [`path: ${q('/')}`];
+      if (n.servername.length > 0) {
+        ws.push(`headers: {Host: ${q(n.servername)}}`);
+      }
+      fields.push(`ws-opts: {${ws.join(', ')}}`);
     }
     if (n.grpcServiceName.length > 0) {
       fields.push(`grpc-opts: {grpc-service-name: ${q(n.grpcServiceName)}}`);
+    }
+    // extraOpts 中继: 结构化槽位未覆盖的键(plugin/plugin-opts、h2-opts、ports、tfo、
+    // mptcp、ip-version、smux、packet-encoding 等, 以及 tuic/hysteria/http/socks5 等
+    // 中继协议的专用键)原样回写; 与已输出键重名时以结构化字段为准。
+    const emitted = new Set<string>();
+    for (const f of fields) {
+      const ci = f.indexOf(':');
+      if (ci > 0) {
+        emitted.add(f.substring(0, ci).trim());
+      }
+    }
+    for (const pair of YamlMerger.parseExtraOpts(n.extraOpts)) {
+      const key = pair[0];
+      const value = pair[1];
+      if (emitted.has(key) || key === 'name' || key === 'type' || key === 'server'
+        || key === 'port' || !/^[a-z][a-z0-9-]{0,24}$/.test(key)) {
+        continue;
+      }
+      if (!ClashConfigGenerator.isSafeText(value)) {
+        continue;
+      }
+      if (value.startsWith('{') || value.startsWith('[')
+        || value === 'true' || value === 'false' || /^-?[0-9]+(\.[0-9]+)?$/.test(value)) {
+        fields.push(`${key}: ${value}`);
+      } else {
+        fields.push(`${key}: ${q(value)}`);
+      }
+      emitted.add(key);
     }
     return `  - {${fields.join(', ')}}`;
   }

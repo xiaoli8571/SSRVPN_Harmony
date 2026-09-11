@@ -7,9 +7,10 @@
  *       结论摘要 + 复制报告/重新检查 + 诊断项卡片 + 最近运行记录 + 技术明细可展开）。
  */
 import { router, promptAction } from '@kit.ArkUI';
-import { pasteboard } from '@kit.BasicServicesKit';
+import { pasteboard, BusinessError } from '@kit.BasicServicesKit';
 import { picker, fileIo as fs } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
+import scanBarcode from '@hms.core.scan.scanBarcode';
 import { Ui } from '../theme/UiTokens';
 import { SubscriptionService } from '../commons/services/SubscriptionService';
 import { Subscription, SubscriptionRefreshStatus } from '../commons/models/Subscription';
@@ -515,6 +516,7 @@ struct SubscriptionPage {
   @State isAdding: boolean = false;
   @State isRefreshing: boolean = false;
   @State isImporting: boolean = false;
+  @State isScanning: boolean = false;
   @State refreshMessage: string = '';
   @State refreshMessageColor: ResourceColor = Ui.primary;
   @State deleteTargetId: string = '';
@@ -622,6 +624,72 @@ struct SubscriptionPage {
       AppLogger.error(TAG, `add failed: ${e instanceof Error ? e.message : String(e)}`);
     }
     this.isAdding = false;
+  }
+
+  /** 使用 Scan Kit 系统扫码页导入订阅；系统扫码页同时提供相册识别入口。 */
+  private async importSubscriptionFromQr(): Promise<void> {
+    if (this.isScanning || this.isAdding || this.isRefreshing || this.isImporting) {
+      return;
+    }
+    this.isScanning = true;
+    try {
+      const result = await scanBarcode.startScanForResult(getContext(this) as Context, {
+        enableMultiMode: false,
+        enableAlbum: true
+      });
+      const raw = result.originalValue.trim();
+      if (raw.length === 0) {
+        this.showError('二维码内容为空');
+        return;
+      }
+      if (raw.length > 4096) {
+        this.showError('二维码内容过长，无法作为订阅链接');
+        return;
+      }
+      const lower = raw.toLowerCase();
+      if (!(lower.startsWith('https://') || lower.startsWith('http://')) ||
+        !SubscriptionFetchPolicy.isValidSubscriptionUrl(raw, true)) {
+        this.showError('二维码不是有效的 HTTP 或 HTTPS 订阅链接');
+        return;
+      }
+      const duplicate = this.service.subscriptions.find((sub: Subscription) => sub.url.trim() === raw);
+      if (duplicate !== undefined) {
+        this.showError('该订阅已存在，无需重复添加');
+        return;
+      }
+      const name = `订阅 ${this.service.subscriptions.length + 1}`;
+      const sub = await this.service.addSubscription(name, raw, '', '');
+      this.reload();
+      try {
+        const refresh = await this.service.refreshSubscription(sub.id);
+        this.reload();
+        if (refresh.status === SubscriptionRefreshStatus.OK && refresh.nodeCount > 0) {
+          this.showError(`二维码订阅导入成功，获取到 ${refresh.nodeCount} 个节点`);
+        } else if (refresh.status === SubscriptionRefreshStatus.OK) {
+          this.showError('二维码订阅已添加，但未获取到数据');
+        } else if (refresh.status === SubscriptionRefreshStatus.PARSE_ERROR) {
+          this.showError('二维码订阅已添加，但内容中未识别到可用节点');
+        } else {
+          this.showError('二维码订阅已添加，但刷新失败，请稍后重试');
+        }
+      } catch (e) {
+        AppLogger.warn(TAG, 'QR subscription refresh failed after add');
+        this.reload();
+        this.showError('二维码订阅已添加，但刷新失败，请稍后重试');
+      }
+    } catch (e) {
+      const err = e as BusinessError;
+      if (err.code === 1000500002) {
+        this.showError('已取消二维码扫描');
+      } else if (err.code === 201) {
+        this.showError('相机权限被拒绝，无法扫描二维码');
+      } else {
+        AppLogger.warn(TAG, `QR scan/import failed code=${err.code}`);
+        this.showError('二维码扫描失败，请重试');
+      }
+    } finally {
+      this.isScanning = false;
+    }
   }
 
   /**
@@ -792,6 +860,31 @@ struct SubscriptionPage {
     return SubscriptionFetchPolicy.redactUrl(url);
   }
 
+  private formatBytes(bytes: number): string {
+    if (bytes < 0) return '未知';
+    const units: string[] = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let value = bytes;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value = value / 1024;
+      unit = unit + 1;
+    }
+    return `${value >= 100 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+  }
+
+  private formatTraffic(sub: Subscription): string {
+    if (sub.totalBytes < 0) return '流量 未知';
+    const used = Math.max(0, sub.uploadBytes) + Math.max(0, sub.downloadBytes);
+    return `流量 ${this.formatBytes(used)} / ${this.formatBytes(sub.totalBytes)}`;
+  }
+
+  private formatExpireTime(expireAt: number): string {
+    if (expireAt < 0) return '有效期 未知';
+    if (expireAt === 0) return '有效期 永久';
+    const d = new Date(expireAt);
+    return `有效期 ${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+  }
+
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
       Column()
@@ -836,16 +929,29 @@ struct SubscriptionPage {
                   .padding({ left: 16, right: 16 })
                   .onSubmit(() => this.addSubscription())
                 Blank().height(16)
-                Button(this.isAdding ? '添加中…' : '添加')
-                  .width('100%')
-                  .height(52)
-                  .fontSize(17)
-                  .fontWeight(FontWeight.Bold)
-                  .fontColor(Color.White)
-                  .backgroundColor(this.isAdding ? Ui.buttonDisabled : Ui.primaryBlue)
-                  .borderRadius(16)
-                  .enabled(!(this.isAdding || this.isRefreshing))
-                  .onClick(() => this.addSubscription())
+                Row({ space: 12 }) {
+                  Button(this.isAdding ? '添加中…' : '添加')
+                    .layoutWeight(1)
+                    .height(52)
+                    .fontSize(17)
+                    .fontWeight(FontWeight.Bold)
+                    .fontColor(Color.White)
+                    .backgroundColor(this.isAdding ? Ui.buttonDisabled : Ui.primaryBlue)
+                    .borderRadius(16)
+                    .enabled(!(this.isAdding || this.isRefreshing || this.isScanning || this.isImporting))
+                    .onClick(() => this.addSubscription())
+                  Button(this.isScanning ? '扫描中…' : '二维码导入')
+                    .layoutWeight(1)
+                    .height(52)
+                    .fontSize(16)
+                    .fontWeight(FontWeight.Bold)
+                    .fontColor(Color.White)
+                    .backgroundColor(this.isScanning ? Ui.buttonDisabled : Ui.primaryBlue)
+                    .borderRadius(16)
+                    .enabled(!(this.isAdding || this.isRefreshing || this.isScanning || this.isImporting))
+                    .onClick(() => this.importSubscriptionFromQr())
+                }
+                .width('100%')
 
                 Blank().height(12)
                 Button(this.isImporting ? '导入中…' : '📂 导入本地 YAML 文件')
@@ -857,7 +963,7 @@ struct SubscriptionPage {
                   .borderRadius(14)
                   .borderWidth(1)
                   .borderColor(Ui.border)
-                  .enabled(!(this.isAdding || this.isRefreshing || this.isImporting))
+                  .enabled(!(this.isAdding || this.isRefreshing || this.isImporting || this.isScanning))
                   .onClick(() => this.importYamlFile())
               }
               .width('100%')
@@ -997,6 +1103,14 @@ struct SubscriptionPage {
                         .layoutWeight(1)
                     }
                     .width('100%')
+                    Blank().height(8)
+                    Row() {
+                      Text(this.formatTraffic(sub))
+                        .fontSize(12).fontColor(Ui.textSecondary).layoutWeight(1)
+                      Text(this.formatExpireTime(sub.expireAt))
+                        .fontSize(12).fontColor(Ui.textTertiary)
+                    }
+                    .width('100%')
                   }
                   .width('100%')
                   .padding(18)
@@ -1007,7 +1121,7 @@ struct SubscriptionPage {
                   .shadow({ radius: 28, color: Ui.shadow, offsetY: 14 })
                   .margin({ bottom: 12 })
                   .gesture(LongPressGesture().onAction(() => this.openEdit(sub)))
-                }, (sub: Subscription) => `${sub.id}|${sub.name}|${sub.nodeCount}|${sub.lastFetchedAt}|${sub.enabled ? 1 : 0}`)
+                }, (sub: Subscription) => `${sub.id}|${sub.name}|${sub.nodeCount}|${sub.lastFetchedAt}|${sub.totalBytes}|${sub.expireAt}|${sub.enabled ? 1 : 0}`)
               }
             }
             .constraintSize({ maxWidth: Ui.pageMaxWidth })

@@ -34,16 +34,11 @@
             "entities": ["entity.system.home"],
             "actions": ["action.system.home"]
           }
-        ],
-        // 长按桌面图标的静态快捷方式: 「启动代理」由 QuickToggleAbility(无界面)
-        // 后台拨 VPN 后自毁, 不打开应用页面。
-        "metadata": [
-          {
-            "name": "ohos.ability.shortcuts",
-            "resource": "$profile:shortcuts_config"
-          }
         ]
       },
+      // 桌面「启动代理」快捷方式已按用户要求下线（2026-09-10）。
+      // QuickToggleAbility.ets 与 VpnQuickStart.ets 源码保留但不再声明，
+      // 需要时重新加入本数组并在 resources/base/profile 恢复 shortcuts_config.json 即可。
       {
         // 长按图标「启动代理」的目标: 无界面宿主, 后台拨 VPN 后立即自毁, 不进 App
         "name": "QuickToggleAbility",
@@ -53,8 +48,9 @@
         "label": "$string:app_name",
         "startWindowIcon": "$media:start_icon",
         "startWindowBackground": "$color:start_window_background",
+        "launchType": "singleton",
         "removeMissionAfterTerminate": true,
-        "exported": true
+        "exported": false
       }
     ],
     "extensionAbilities": [

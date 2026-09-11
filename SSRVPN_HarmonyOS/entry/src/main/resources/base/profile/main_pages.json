@@ -3,6 +3,7 @@
     "pages/HomePage",
     "pages/SubscriptionPage",
     "pages/NodeEditPage",
-    "pages/NodeSelectionPage"
+    "pages/NodeSelectionPage",
+    "pages/SettingsPage"
   ]
 }

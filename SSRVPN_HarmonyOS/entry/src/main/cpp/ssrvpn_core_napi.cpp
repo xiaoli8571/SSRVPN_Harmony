@@ -173,8 +173,11 @@ static napi_value StartCore(napi_env env, napi_callback_info info)
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     std::string configPath;
     int tunFd = -1;
+    // Headless latency testing intentionally starts mihomo without a TUN fd and
+    // passes -1. Reject values below -1, while preserving validation for both
+    // normal VPN startup (fd >= 0) and headless startup (fd == -1).
     if (argc < 2 || !getConfigPath(env, args[0], configPath) ||
-        napi_get_value_int32(env, args[1], &tunFd) != napi_ok || tunFd < 0) {
+        napi_get_value_int32(env, args[1], &tunFd) != napi_ok || tunFd < -1) {
         napi_value result;
         napi_get_boolean(env, false, &result);
         napi_resolve_deferred(env, deferred, result);

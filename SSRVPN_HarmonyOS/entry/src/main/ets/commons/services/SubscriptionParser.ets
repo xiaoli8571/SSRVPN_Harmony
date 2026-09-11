@@ -143,6 +143,7 @@ export class SubscriptionParser {
       node.hyUp = merged.hyUp;
       node.hyDown = merged.hyDown;
       node.alpnList = merged.alpnList;
+      node.extraOpts = merged.extraOpts;
       node.rawYaml = '';
       out.push(node);
     }

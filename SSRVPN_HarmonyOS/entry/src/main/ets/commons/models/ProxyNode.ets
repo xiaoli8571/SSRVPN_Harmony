@@ -46,6 +46,8 @@ export class ProxyNode {
   hyUp: string = '';
   hyDown: string = '';
   alpnList: string = '';
+  /** 结构化槽位之外的额外 mihomo 键值(JSON 数组: [[key, value], ...])，生成配置时原样回写 */
+  extraOpts: string = '';
   rawYaml: string = '';
   rawUri: string = '';
   groupName: string = '';
@@ -76,24 +78,9 @@ export class ProxyNode {
     return null;
   }
 
-  toClashProxy(): Record<string, Object> {
-    const out: Record<string, Object> = {};
-    out['name'] = this.name;
-    out['server'] = this.server;
-    out['port'] = this.port;
-    out['cipher'] = this.method;
-    out['password'] = this.password;
-    if (this.type === ProxyNodeType.SSR) {
-      out['type'] = 'ssr';
-      out['protocol'] = this.protocol;
-      out['protocol-param'] = this.protocolParam;
-      out['obfs'] = this.obfs;
-      out['obfs-param'] = this.obfsParam;
-    } else {
-      out['type'] = 'ss';
-    }
-    return out;
-  }
+  // 说明: 旧版曾有一个 toClashProxy() 便捷方法, 它把一切非 ss/ssr 类型都当成 ss 输出,
+  // 与 ClashConfigGenerator.proxyYamlLine() 的全协议实现冲突, 且全工程无人调用,
+  // 已删除以免被误用导致 vless/vmess/trojan/hysteria2 节点被降级成 ss。
 }
 
 /**
