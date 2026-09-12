@@ -86,14 +86,23 @@ export class YamlMerger {
     const out: string[] = [];
     let inSection = false;
     const rawLines = yaml.split('\n');
-    for (const line of rawLines) {
+    for (let line of rawLines) {
+      // UTF-8 BOM is legal at the beginning of a YAML stream. Remove it before
+      // testing top-level keys, otherwise a leading `proxies:` is never found.
+      if (line.startsWith('\uFEFF')) {
+        line = line.substring(1);
+      }
       if (!line.startsWith(' ') && !line.startsWith('\t')) {
         const trimmed = line.trim();
         if (trimmed.startsWith(`${sectionName}:`)) {
           inSection = true;
           continue;
         }
-        if (inSection && trimmed.includes(':') && !trimmed.startsWith('#') && !trimmed.startsWith('-')) {
+        // Any non-empty, non-comment zero-indentation line starts the next
+        // top-level YAML construct. Stop immediately so anchors/merge keys or
+        // malformed trailing content cannot contaminate previously extracted
+        // proxy entries.
+        if (inSection && trimmed.length > 0 && !trimmed.startsWith('#')) {
           break;
         }
       }
@@ -109,7 +118,9 @@ export class YamlMerger {
     let minIndent = 999;
     for (const line of section) {
       const trimmed = line.trimStart();
-      if (trimmed.length === 0) {
+      // 顶层注释可出现在 proxies 节内，但不能参与最小缩进计算；
+      // 否则 minIndent 会被拉到 0，所有正常的 "  - " 条目会被额外缩进并提取为 0 条。
+      if (trimmed.length === 0 || trimmed.startsWith('#')) {
         continue;
       }
       const indent = line.length - trimmed.length;
@@ -157,8 +168,11 @@ export class YamlMerger {
     return items;
   }
 
-  /** 按 YAML 引号和花括号/方括号深度切分 flow-map 字段；数组值(alpn:[h3,h2])容忍并保留。 */
-  private static splitFlowMap(content: string): string[] {
+  /**
+   * 按 YAML 引号与集合深度切分 flow collection。分隔符仅在顶层生效，
+   * 因此嵌套 map/sequence、带逗号的引号值、emoji 与裸 IPv6 都不会被误切。
+   */
+  private static splitTopLevel(content: string, separator: string): string[] {
     const out: string[] = [];
     let current = '';
     let quote = '';
@@ -180,7 +194,13 @@ export class YamlMerger {
       if (quote.length > 0) {
         current += ch;
         if (ch === quote) {
-          quote = '';
+          // YAML 单引号用两个连续单引号表示字面单引号。
+          if (quote === "'" && i + 1 < content.length && content.charAt(i + 1) === "'") {
+            current += content.charAt(i + 1);
+            i = i + 1;
+          } else {
+            quote = '';
+          }
         }
         continue;
       }
@@ -205,7 +225,7 @@ export class YamlMerger {
         }
         bracketDepth = bracketDepth - 1;
         current += ch;
-      } else if (ch === ',' && braceDepth === 0 && bracketDepth === 0) {
+      } else if (ch === separator && braceDepth === 0 && bracketDepth === 0) {
         if (current.trim().length > 0) {
           out.push(current.trim());
         }
@@ -223,10 +243,16 @@ export class YamlMerger {
     return out;
   }
 
-  /** 查找不在引号内的字段分隔冒号。 */
+  private static splitFlowMap(content: string): string[] {
+    return YamlMerger.splitTopLevel(content, ',');
+  }
+
+  /** 查找顶层第一个分隔冒号；嵌套集合和裸 IPv6 内的冒号均不参与切键值。 */
   private static findUnquotedColon(value: string): number {
     let quote = '';
     let escaped = false;
+    let braceDepth = 0;
+    let bracketDepth = 0;
     for (let i = 0; i < value.length; i++) {
       const ch = value.charAt(i);
       if (quote === '"' && escaped) {
@@ -239,11 +265,23 @@ export class YamlMerger {
       }
       if (quote.length > 0) {
         if (ch === quote) {
-          quote = '';
+          if (quote === "'" && i + 1 < value.length && value.charAt(i + 1) === "'") {
+            i = i + 1;
+          } else {
+            quote = '';
+          }
         }
       } else if (ch === '"' || ch === "'") {
         quote = ch;
-      } else if (ch === ':') {
+      } else if (ch === '{') {
+        braceDepth = braceDepth + 1;
+      } else if (ch === '}') {
+        braceDepth = Math.max(0, braceDepth - 1);
+      } else if (ch === '[') {
+        bracketDepth = bracketDepth + 1;
+      } else if (ch === ']') {
+        bracketDepth = Math.max(0, bracketDepth - 1);
+      } else if (ch === ':' && braceDepth === 0 && bracketDepth === 0) {
         return i;
       }
     }
