@@ -30,6 +30,24 @@ export class LatencyController {
     LatencyController.scheduleNotify();
   }
 
+  /**
+   * 丢弃当前订阅已不存在节点的延迟，避免订阅反复刷新或换源后 Map 常驻增长。
+   * 只有确实删除条目时才通知，因而可安全地在列表重建路径调用。
+   */
+  static retainOnly(nodeNames: string[]): void {
+    const active = new Set<string>(nodeNames);
+    let changed = false;
+    for (const name of LatencyController.map.keys()) {
+      if (!active.has(name)) {
+        LatencyController.map.delete(name);
+        changed = true;
+      }
+    }
+    if (changed) {
+      LatencyController.scheduleNotify();
+    }
+  }
+
   static addListener(listener: () => void): void {
     if (LatencyController.listeners.indexOf(listener) < 0) {
       LatencyController.listeners.push(listener);

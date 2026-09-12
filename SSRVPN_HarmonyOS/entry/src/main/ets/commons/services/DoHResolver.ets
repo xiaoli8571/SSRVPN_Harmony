@@ -32,8 +32,9 @@ interface DoHResponse {
 }
 
 export class DoHResolver {
-  /** 跨连接缓存: domain -> ip, 避免每次连接重复解析 */
+  /** 跨连接缓存: domain -> ip, 避免每次连接重复解析。限制容量，防止订阅频繁变化后常驻增长。 */
   private static cache: Map<string, string> = new Map<string, string>();
+  private static readonly CACHE_MAX_ENTRIES: number = 512;
   /** 并发度: 一次 TLS 握手 + 查询约 200-400ms, 16 路足够 3s 内清几十上百个域名 */
   private static readonly WORKERS: number = 16;
 
@@ -83,7 +84,7 @@ export class DoHResolver {
             const d = current[i];
             const ip = await DoHResolver.resolveA(d);
             if (ip.length > 0) {
-              DoHResolver.cache.set(d, ip);
+              DoHResolver.cachePut(d, ip);
               result[d] = ip;
             } else if (pass === 0) {
               remaining.push(d);
@@ -149,7 +150,7 @@ export class DoHResolver {
         for (const a of parsed.Answer) {
           // type 1 = A; data 是 IPv4 点分十进制
           if (a.type === 1 && DoHResolver.looksLikeIPv4(a.data)) {
-            DoHResolver.cache.set(domain, a.data);
+            DoHResolver.cachePut(domain, a.data);
             return a.data;
           }
         }
@@ -174,5 +175,20 @@ export class DoHResolver {
       }
     }
     return true;
+  }
+
+  /** Map 保持插入顺序；命中时移到末尾，并淘汰最久未使用的条目。 */
+  private static cachePut(domain: string, ip: string): void {
+    if (DoHResolver.cache.has(domain)) {
+      DoHResolver.cache.delete(domain);
+    }
+    DoHResolver.cache.set(domain, ip);
+    while (DoHResolver.cache.size > DoHResolver.CACHE_MAX_ENTRIES) {
+      const oldest = DoHResolver.cache.keys().next();
+      if (oldest.done) {
+        break;
+      }
+      DoHResolver.cache.delete(oldest.value);
+    }
   }
 }

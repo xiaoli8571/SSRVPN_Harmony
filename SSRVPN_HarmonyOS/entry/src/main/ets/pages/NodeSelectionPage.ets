@@ -424,7 +424,9 @@ struct NodeSelectionPage {
 
   private rebuildRows(): void {
     const rows: NodeRow[] = [];
+    const activeNames: string[] = [];
     for (const n of this.subs.nodes) {
+      activeNames.push(n.name);
       if (this.filterSubId.length > 0 && n.subscriptionId !== this.filterSubId) {
         continue;
       }
@@ -435,6 +437,7 @@ struct NodeSelectionPage {
       };
       rows.push(row);
     }
+    LatencyController.retainOnly(activeNames);
     // 排序：按持久化的测速快照恢复顺序（auto/manual），无数据则保持订阅原始顺序
     if (this.sortMode !== NodeSortModes.DEFAULT) {
       const snap = this.sortSnapshot;

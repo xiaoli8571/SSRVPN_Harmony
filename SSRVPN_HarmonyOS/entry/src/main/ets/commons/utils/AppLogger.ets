@@ -7,8 +7,10 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const DOMAIN: number = 0x5256; // "SR"
-const MAX_FILE_LINES = 2000;
-const TRIM_TO_LINES = 1000;
+// Keep enough recent diagnostics for troubleshooting without retaining thousands of
+// timestamped strings for the full lifetime of the UI process.
+const MAX_FILE_LINES = 1000;
+const TRIM_TO_LINES = 500;
 
 export class AppLogger {
   private static lines: string[] = [];
@@ -51,7 +53,10 @@ export class AppLogger {
   }
 
   static addListener(listener: (line: string) => void): void {
-    AppLogger.listeners.push(listener);
+    // Page lifecycle callbacks can be repeated. Do not keep duplicate closures alive.
+    if (!AppLogger.listeners.includes(listener)) {
+      AppLogger.listeners.push(listener);
+    }
   }
 
   static removeListener(listener: (line: string) => void): void {

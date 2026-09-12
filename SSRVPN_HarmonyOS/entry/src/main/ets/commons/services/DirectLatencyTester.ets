@@ -118,7 +118,7 @@ export class DirectLatencyTester {
         }
         settled = true;
         if (timerId >= 0) {
-          clearInterval(timerId);
+          clearTimeout(timerId);
         }
         try {
           tcp.off('message');
@@ -145,11 +145,11 @@ export class DirectLatencyTester {
       }).catch(() => {
         finish(-1);
       });
-      timerId = setInterval(() => {
-        if (Date.now() - start >= TCP_TIMEOUT_MS + TLS_TIMEOUT_MS) {
-          finish(-1);
-        }
-      }, 150);
+      // A single deadline timer avoids waking the JS thread every 150ms for every
+      // concurrent probe. Socket completion cancels it immediately.
+      timerId = setTimeout(() => {
+        finish(-1);
+      }, TCP_TIMEOUT_MS + TLS_TIMEOUT_MS);
     });
   }
 
@@ -220,7 +220,7 @@ export class DirectLatencyTester {
         }
         settled = true;
         if (timerId >= 0) {
-          clearInterval(timerId);
+          clearTimeout(timerId);
         }
         try {
           udp.off('message');
@@ -247,11 +247,11 @@ export class DirectLatencyTester {
       }).catch(() => {
         finish(-1);
       });
-      timerId = setInterval(() => {
-        if (Date.now() - start >= QUIC_TIMEOUT_MS) {
-          finish(-1);
-        }
-      }, 150);
+      // QUIC needs one deadline, not periodic polling. This materially reduces
+      // timer callbacks and short-lived closures during batch node tests.
+      timerId = setTimeout(() => {
+        finish(-1);
+      }, QUIC_TIMEOUT_MS);
     });
   }
 

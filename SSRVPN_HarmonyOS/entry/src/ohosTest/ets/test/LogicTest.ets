@@ -10,6 +10,7 @@ import {
   shouldExecuteDisconnect, shouldSuppressConnect
 } from '../../../../../main/ets/commons/services/TunnelAuthority';
 import { LatencyStyle, NodeDisplay } from '../../../../../main/ets/theme/UiTokens';
+import { LatencyController } from '../../../../../main/ets/commons/services/LatencyController';
 import {
   NodeSortSnapshot, NodeSortModes, NodeLatencyRecord, NodeProtocolPolicy
 } from '../../../../../main/ets/commons/services/NodeSortPersistence';
@@ -178,6 +179,20 @@ export default function logicTest() {
       expect(LatencyStyle.color(400)).assertEqual('#E35D6A');
       expect(LatencyStyle.text(-1)).assertEqual('超时');
       expect(LatencyStyle.text(null)).assertEqual('--');
+    });
+
+    it('latency_controller_retain_only_reclaims_stale_nodes', 0, () => {
+      LatencyController.clearAll();
+      LatencyController.set('active-a', 31);
+      LatencyController.set('stale-b', 92);
+      LatencyController.set('active-c', -1);
+
+      LatencyController.retainOnly(['active-a', 'active-c']);
+
+      expect(LatencyController.latencyFor('active-a')).assertEqual(31);
+      expect(LatencyController.latencyFor('active-c')).assertEqual(-1);
+      expect(LatencyController.latencyFor('stale-b')).assertNull();
+      LatencyController.clearAll();
     });
 
     it('yaml_merger_dedupe_and_name_preserve', 0, () => {

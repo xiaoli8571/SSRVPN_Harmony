@@ -59,6 +59,8 @@ const STATE_PROBE_CACHE_MS = 120;
 /** API readiness 快速起步并有上限退避，总超时仍由调用方 deadline 决定。 */
 const READINESS_INITIAL_DELAY_MS = 40;
 const READINESS_MAX_DELAY_MS = 300;
+/** Two-second traffic sampling reduces /connections allocations and UI redraws. */
+const TRAFFIC_POLL_INTERVAL_MS = 2000;
 
 export function nextReadinessDelayMs(currentMs: number): number {
   if (currentMs <= 0) {
@@ -139,6 +141,8 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
   ipv6Active: boolean = false;
   private monitorTimer: number = -1;
   private trafficTimer: number = -1;
+  /** Prevent overlapping requests when a traffic poll is slow. */
+  private trafficPollRunning: boolean = false;
   private connectSeq: number = 0; // 启动代际门控（对应 StartGenerationGate）
   /** 连接期间收到的断开意图。requestDisconnect 会立即使旧连接代际失效。 */
   private disconnectRequested: boolean = false;
@@ -1436,11 +1440,6 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
       }
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 800));
 
-      // IPv6 入站环境探测（FlClash 等主流客户端语义）: 当前网络确实有 IPv6 出口
-      // 才开双栈; 无 IPv6 环境自动绕过(纯 IPv4), 避免 ::/0 + fake-ip6 把
-      // IPv6-preferred 应用(YouTube 等)引上死路。
-      this.ipv6Active = await Ipv6Detector.hasIPv6();
-
       // geoip.metadb 缺失时降级生成（不含 GEOIP 规则）, 避免内核在 config.Parse
       // 阶段联网下载 MMDB 失败导致启动卡死; 连接成功后后台补齐, 下次连接生效。
       const geoipPath = `${this.context.cacheDir}/geoip.metadb`;
@@ -1466,11 +1465,23 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
         }
         serverDomains.push(s);
       }
+      // IPv6 detection and DoH pre-resolution are independent. Running them in parallel
+      // removes the IPv6 probe from the cold-start critical path while preserving semantics.
+      const ipv6Task = Ipv6Detector.hasIPv6();
+      const hostsTask = DoHResolver.resolveMany(serverDomains, 6000);
       let proxyHosts: Record<string, string> = {};
       try {
-        proxyHosts = await DoHResolver.resolveMany(serverDomains, 6000);
+        const startupResults = await Promise.all([ipv6Task, hostsTask]);
+        this.ipv6Active = startupResults[0];
+        proxyHosts = startupResults[1];
       } catch (e) {
-        AppLogger.warn(TAG, `DoH pre-resolve failed: ${e instanceof Error ? e.message : String(e)}`);
+        this.ipv6Active = false;
+        AppLogger.warn(TAG, `startup network probes failed: ${e instanceof Error ? e.message : String(e)}`);
+        try {
+          proxyHosts = await hostsTask;
+        } catch (ignored) {
+          proxyHosts = {};
+        }
       }
       AppLogger.info(TAG, `DoH pinned ${Object.keys(proxyHosts).length}/${serverDomains.length} proxy servers`);
       const unpinnedDomains: string[] = [];
@@ -1793,7 +1804,12 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
           return;
         }
     }, 3000);
+    this.trafficPollRunning = false;
     this.trafficTimer = setInterval(() => {
+      if (this.trafficPollRunning || this.state !== ConnState.CONNECTED) {
+        return;
+      }
+      this.trafficPollRunning = true;
       this.api.traffic().then((t: TrafficSnapshot) => {
         this.traffic = t;
         if (this.state === ConnState.CONNECTED) {
@@ -1802,8 +1818,10 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
             `↓ ${this.formatSpeed(t.downloadSpeed)}  ↑ ${this.formatSpeed(t.uploadSpeed)}`);
         }
         this.notify();
+      }).finally(() => {
+        this.trafficPollRunning = false;
       });
-    }, 1000);
+    }, TRAFFIC_POLL_INTERVAL_MS);
   }
 
   private stopMonitors(): void {
@@ -1815,6 +1833,7 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
       clearInterval(this.trafficTimer);
       this.trafficTimer = -1;
     }
+    this.trafficPollRunning = false;
   }
 
   async diagnostics(): Promise<AppDiagnostics> {

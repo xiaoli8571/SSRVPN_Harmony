@@ -62,9 +62,13 @@ export class FormStateSync {
   /** 仅有信息卡片登记时运行的低频指标刷新器。 */
   private static infoRefreshTimer: number = -1;
   private static infoRefreshContext: Context | null = null;
+  /** 防止一次指标刷新超过 5s 后与下一轮重叠，避免重复请求和内存峰值。 */
+  private static infoRefreshRunning: boolean = false;
   /** 权威对账定时器：卡片进程存活期间持续把真实状态纠偏回全部卡片。 */
   private static reconcileTimer: number = -1;
   private static reconcileContext: Context | null = null;
+  /** 慢设备或存储繁忙时禁止 3s 对账任务重入。 */
+  private static reconcileRunning: boolean = false;
 
   static disconnected(nodeName: string = ''): FormStateSnapshot {
     return FormStateSync.createSnapshot(FormStateCode.DISCONNECTED, nodeName);
@@ -346,6 +350,7 @@ export class FormStateSync {
       FormStateSync.infoRefreshTimer = -1;
     }
     FormStateSync.infoRefreshContext = null;
+    FormStateSync.infoRefreshRunning = false;
     FormStateSync.stopReconcile();
   }
 
@@ -362,11 +367,14 @@ export class FormStateSync {
     }
     FormStateSync.reconcileTimer = setInterval((): void => {
       const active = FormStateSync.reconcileContext;
-      if (active === null) {
+      if (active === null || FormStateSync.reconcileRunning) {
         return;
       }
+      FormStateSync.reconcileRunning = true;
       FormStateSync.reconcile(active).catch((error: Error): void => {
         AppLogger.warn(TAG, `reconcile failed: ${error.message}`);
+      }).finally((): void => {
+        FormStateSync.reconcileRunning = false;
       });
     }, RECONCILE_INTERVAL_MS);
   }
@@ -377,6 +385,7 @@ export class FormStateSync {
       FormStateSync.reconcileTimer = -1;
     }
     FormStateSync.reconcileContext = null;
+    FormStateSync.reconcileRunning = false;
   }
 
   static isReconcileRunning(): boolean {
@@ -401,11 +410,14 @@ export class FormStateSync {
     }
     FormStateSync.infoRefreshTimer = setInterval((): void => {
       const activeContext = FormStateSync.infoRefreshContext;
-      if (activeContext === null) {
+      if (activeContext === null || FormStateSync.infoRefreshRunning) {
         return;
       }
+      FormStateSync.infoRefreshRunning = true;
       FormStateSync.refreshInfoForms(activeContext).catch((error: Error): void => {
         AppLogger.warn(TAG, `info refresh failed: ${error.message}`);
+      }).finally((): void => {
+        FormStateSync.infoRefreshRunning = false;
       });
     }, INFO_REFRESH_INTERVAL_MS);
   }

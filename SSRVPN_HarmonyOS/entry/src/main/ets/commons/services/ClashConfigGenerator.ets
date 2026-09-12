@@ -24,7 +24,8 @@ export class ClashConfigGenerator {
     lines.push('secret: "' + apiSecret + '"');
     // 代理模式（upstream settings.proxyMode）：rule=规则 / global=全局
     lines.push('mode: ' + (settings.proxyMode === 'global' ? 'global' : 'rule'));
-    lines.push('log-level: info');
+    // Warning retains operational failures while reducing steady-state formatting and I/O.
+    lines.push('log-level: warning');
     // IPv6 入站(FlClash 常用功能): 按当前网络环境自动启用 —— 连接时由 Ipv6Detector
     // 探测, 有 IPv6 出口才开; 无 IPv6 环境自动绕过(纯 IPv4), 防止 IPv6-preferred
     // 应用(YouTube 等)被 fake-ip6 + ::/0 引上死路。
