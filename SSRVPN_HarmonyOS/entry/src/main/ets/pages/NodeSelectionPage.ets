@@ -29,7 +29,7 @@ const TAG = 'NodeSelectionPage';
  * 用户更关注快速返回和大致排序。10 路比 12 路保留少量资源余量，同时显著缩短
  * 大订阅的整轮耗时。首轮失败仍会进行一次短时低压力复测，控制假超时。
  */
-const BATCH_LANES = 16;
+const BATCH_LANES = 8;
 /**
  * 批量测速单节点超时（毫秒）。真机快照里存活节点的实测延迟分布在 39~841ms，
  * 快速模式只需要用于相对排序的近似结果：首轮 1800ms 足以覆盖常见可用节点，
@@ -38,8 +38,11 @@ const BATCH_LANES = 16;
 const BATCH_NODE_TIMEOUT_MS = 1500;
 /** 单节点手动测速保留原来的宽松超时（用户只等一个节点，优先给足机会成功） */
 const SINGLE_NODE_TIMEOUT_MS = 5000;
-/** 本轮主地址失败后唯一允许切换的备用测速地址 */
-const LATENCY_FALLBACK_URL = 'https://cp.cloudflare.com/generate_204';
+/** 可靠测速地址按顺序回退；每个 URL 只尝试一次，且共享单节点总预算。 */
+const LATENCY_FALLBACK_URLS: string[] = [
+  'https://cp.cloudflare.com/generate_204',
+  'https://www.gstatic.com/generate_204'
+];
 /**
  * 离开节点页后「宽限回收测速内核」的等待时长（毫秒）。
  * 测速内核启动链路包含 DoH 预解析 + 停旧扩展 + 600ms 等待 + 启新扩展 + 健康轮询，
@@ -244,12 +247,8 @@ struct NodeSelectionPage {
   private testCoreOk: boolean = false;
   /** 本次会话选定的测速通道（批量开始前一次性确定，避免逐节点漂移） */
   private latencyChannel: string = CHANNEL_DIRECT;
-  /** 当前批次共享的测速 URL，批次开始时重置为用户配置的主地址 */
-  private latencyRoundUrl: string = '';
-  /** 当前批次是否已经从主地址切换到固定备用地址 */
-  private latencyFallbackUsed: boolean = false;
-  /** 并发 worker 首次失败时共享同一个切换任务，避免重复主备双测 */
-  private latencyFallbackSwitch: Promise<number> | null = null;
+  /** TestCore 明确启动失败后的直连结果只表示端口可达，绝不冒充代理延迟。 */
+  private directReachableNames: Set<string> = new Set<string>();
   @State refreshing: boolean = false;
   @State isConnected: boolean = false;
   @State latencyTick: number = 0;
@@ -560,11 +559,22 @@ struct NodeSelectionPage {
     if (this.batchTesting || this.testingName.length > 0) {
       return;
     }
+    const generation = this.batchGen + 1;
+    this.batchGen = generation;
     this.testingName = node.name;
-    this.resetLatencyUrlRound();
     await this.prepareLatencyChannel();
+    if (this.batchGen !== generation) {
+      return;
+    }
     const delay = await this.testNodeDelay(node, SINGLE_NODE_TIMEOUT_MS);
-    if (delay !== -2) { // -2 = 协议不支持离线测试, 保持"未测试"态
+    if (this.batchGen !== generation) {
+      return;
+    }
+    if (this.latencyChannel === CHANNEL_DIRECT && delay >= 0) {
+      this.directReachableNames.add(node.name);
+      LatencyController.set(node.name, -2);
+    } else if (delay !== -2) { // -2 = 协议不支持离线测试, 保持"未测试"态
+      this.directReachableNames.delete(node.name);
       LatencyController.set(node.name, delay);
     }
     this.testingName = '';
@@ -603,12 +613,6 @@ struct NodeSelectionPage {
    * 内核拉不起来时才回退 DirectLatencyTester 的 TCP/QUIC 探测。
    * 已连接时直接走 Clash API。
    */
-  /** 每次单节点或批量测速开始时重置主备状态。 */
-  private resetLatencyUrlRound(): void {
-    this.latencyRoundUrl = this.settings.testLatencyUrl;
-    this.latencyFallbackUsed = false;
-    this.latencyFallbackSwitch = null;
-  }
 
   /**
    * 使用当前轮共享 URL 测速。主地址首次失败时仅由一个调用切换并测试备用地址，
@@ -616,29 +620,37 @@ struct NodeSelectionPage {
    */
   private async testNodeDelay(node: ProxyNode, timeoutMs: number): Promise<number> {
     if (!(this.isConnected || this.testCoreOk)) {
-      // 直连兜底也必须服从调用方超时。此前批量路径传入 1500ms，但
-      // DirectLatencyTester 内部仍可能等待 4~7 秒，导致最后几个超时节点
-      // 拖住 Promise.all，出现“结果都出来了但测速迟迟不结束”的长尾。
+      // TestCore 明确启动失败时才降级。此结果只表示端口可达性，调用方不得
+      // 将它写成普通代理延迟；底层探测仍严格服从调用方的毫秒超时。
       return DirectLatencyTester.testNode(node, timeoutMs);
     }
-    if (this.latencyRoundUrl.length === 0) {
-      this.resetLatencyUrlRound();
+    const urls: string[] = [];
+    const primary = this.settings.testLatencyUrl.trim();
+    if (primary.length > 0) {
+      urls.push(primary);
     }
-    const requestUrl = this.latencyRoundUrl;
-    const delay = await this.orchestrator.api.testLatency(node.name, requestUrl, timeoutMs);
-    if (delay >= 0 || this.latencyFallbackUsed || requestUrl === LATENCY_FALLBACK_URL) {
-      return delay;
+    for (const fallback of LATENCY_FALLBACK_URLS) {
+      if (urls.indexOf(fallback) < 0) {
+        urls.push(fallback);
+      }
     }
-    if (this.latencyFallbackSwitch === null) {
-      this.latencyFallbackUsed = true;
-      this.latencyRoundUrl = LATENCY_FALLBACK_URL;
-      AppLogger.warn(TAG, `latency primary failed; switch round URL to fallback`);
-      this.latencyFallbackSwitch = this.orchestrator.api.testLatency(
-        node.name, LATENCY_FALLBACK_URL, timeoutMs);
+    // 所有 URL 尝试共享一个单节点总预算，回退不会把 timeout 成倍放大。
+    const deadline = Date.now() + timeoutMs;
+    for (let index = 0; index < urls.length; index++) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        return -1;
+      }
+      const attemptsLeft = urls.length - index;
+      const attemptBudget = attemptsLeft > 1
+        ? Math.max(250, Math.floor(remaining / attemptsLeft)) : remaining;
+      const delay = await this.orchestrator.api.testLatency(node.name, urls[index], attemptBudget);
+      if (delay >= 0) {
+        return delay;
+      }
+      AppLogger.warn(TAG, `latency URL failed: index=${index + 1}/${urls.length}`);
     }
-    const fallbackDelay = await this.latencyFallbackSwitch;
-    this.latencyFallbackSwitch = null;
-    return fallbackDelay;
+    return -1;
   }
 
   /** 长按删除单个节点 */
@@ -684,11 +696,15 @@ struct NodeSelectionPage {
     if (this.batchTesting) {
       return;
     }
+    const generation = this.batchGen + 1;
+    this.batchGen = generation;
     this.batchTesting = true;
-    this.resetLatencyUrlRound();
     const batchStartedAt = Date.now();
     // 1) 通道预热（一次，放在所有 worker 之外）
     await this.prepareLatencyChannel();
+    if (this.batchGen !== generation || !this.batchTesting) {
+      return;
+    }
     // 2) 队列排序：长尾优先
     const rows = this.buildLatencyQueue();
     const list = rows.map((r) => r.node);
@@ -708,8 +724,8 @@ struct NodeSelectionPage {
     for (let w = 0; w < lanes; w++) {
       workers.push((async (): Promise<void> => {
         for (;;) {
-          if (!this.batchTesting) {
-            return; // 批次被取消
+          if (!this.batchTesting || this.batchGen !== generation) {
+            return; // 批次被取消或已被新批次取代
           }
           const i = cursor;
           cursor = cursor + 1;
@@ -717,10 +733,21 @@ struct NodeSelectionPage {
             return;
           }
           const delay = await this.testNodeDelay(list[i], BATCH_NODE_TIMEOUT_MS);
-          if (delay !== -2) {
-            LatencyController.set(list[i].name, delay);
+          // 请求返回后再次检查代次，迟到响应不得覆盖新批次。
+          if (!this.batchTesting || this.batchGen !== generation) {
+            return;
           }
-          collected[i].latency = delay;
+          if (this.latencyChannel === CHANNEL_DIRECT && delay >= 0) {
+            this.directReachableNames.add(list[i].name);
+            LatencyController.set(list[i].name, -2);
+            collected[i].latency = -2;
+          } else {
+            this.directReachableNames.delete(list[i].name);
+            if (delay !== -2) {
+              LatencyController.set(list[i].name, delay);
+            }
+            collected[i].latency = delay;
+          }
         }
       })());
     }
@@ -730,7 +757,7 @@ struct NodeSelectionPage {
     // 单节点路径保留 5 秒宽松超时。
     // 合并窗口内的最后一批结果立即上屏，别让用户多等 200ms
     LatencyController.flushNow();
-    const cancelled = !this.batchTesting;
+    const cancelled = !this.batchTesting || this.batchGen !== generation;
     this.batchTesting = false;
     this.testingName = '';
     let okCount = 0;
@@ -847,7 +874,9 @@ struct NodeSelectionPage {
               .fontColor(this.batchTesting ? Ui.primary : Ui.textPrimary)
               .onClick(() => {
                 if (this.batchTesting) {
+                  this.batchGen = this.batchGen + 1;
                   this.batchTesting = false;
+                  this.orchestrator.api.cancelInflight();
                 } else {
                   this.testAll();
                 }
@@ -1189,10 +1218,13 @@ struct NodeSelectionPage {
       .layoutWeight(1)
       .onClick(() => this.selectNode(row.node))
 
-      Text(this.testingName === row.node.name ? '…' : LatencyStyle.text(LatencyController.latencyFor(row.node.name)))
+      Text(this.testingName === row.node.name ? '…'
+        : (this.directReachableNames.has(row.node.name) ? '端口可达'
+          : LatencyStyle.text(LatencyController.latencyFor(row.node.name))))
         .fontSize(14)
         .fontWeight(FontWeight.Bold)
-        .fontColor(LatencyStyle.color(LatencyController.latencyFor(row.node.name)))
+        .fontColor(this.directReachableNames.has(row.node.name)
+          ? Ui.textSecondary : LatencyStyle.color(LatencyController.latencyFor(row.node.name)))
         .padding({ left: 8, right: 8 })
         .onClick(() => this.testOne(row.node))
 
