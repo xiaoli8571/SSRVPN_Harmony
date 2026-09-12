@@ -360,7 +360,7 @@ export class ClashConfigGenerator {
       const key = pair[0];
       const value = pair[1];
       if (emitted.has(key) || key === 'name' || key === 'type' || key === 'server'
-        || key === 'port' || !/^[a-z][a-z0-9-]{0,24}$/.test(key)) {
+        || key === 'port' || !YamlMerger.isSafeExtraKey(key)) {
         continue;
       }
       if (!ClashConfigGenerator.isSafeText(value)) {

@@ -694,8 +694,14 @@ export class YamlMerger {
    * 必须括号平衡且仅含安全字符 —— 防止破坏 flow-map 结构或注入额外配置行。
    * 非法时返回 null(仅丢该键, 绝不影响节点其余部分)。
    */
+  /** 额外字段键必须是普通 Mihomo 键，并拒绝原型污染保留名。 */
+  static isSafeExtraKey(key: string): boolean {
+    return /^[a-z][a-z0-9-]{0,63}$/.test(key)
+      && key !== '__proto__' && key !== 'prototype' && key !== 'constructor';
+  }
+
   private static captureExtraOpt(key: string, rawValue: string): string | null {
-    if (!/^[a-z][a-z0-9-]{0,24}$/.test(key)) {
+    if (!YamlMerger.isSafeExtraKey(key)) {
       return null;
     }
     const raw = rawValue.trim();
