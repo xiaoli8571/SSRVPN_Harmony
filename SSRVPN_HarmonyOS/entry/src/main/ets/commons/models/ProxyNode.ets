@@ -132,17 +132,20 @@ export class SsrCodec {
     if (mainParts.length < 6) {
       return null;
     }
+    // SSR 主体末尾五段固定为 port/protocol/method/obfs/password；
+    // 从右侧取值，避免裸 IPv6 地址中的冒号把 server 拆坏。
+    const tail = mainParts.length - 5;
     const node = new ProxyNode();
     node.id = id;
     node.subscriptionId = subscriptionId;
     node.type = ProxyNodeType.SSR;
     node.rawUri = 'ssr://' + body;
-    node.server = mainParts[0];
-    node.port = parseInt(mainParts[1]);
-    node.protocol = mainParts[2];
-    node.method = mainParts[3];
-    node.obfs = mainParts[4];
-    node.password = mainParts[5];
+    node.server = SsrCodec.stripHostBrackets(mainParts.slice(0, tail).join(':'));
+    node.port = parseInt(mainParts[tail]);
+    node.protocol = mainParts[tail + 1];
+    node.method = mainParts[tail + 2];
+    node.obfs = mainParts[tail + 3];
+    node.password = mainParts[tail + 4];
     const params = mainSplit.length > 1 ? mainSplit[1] : '';
     for (const kv of params.split('&')) {
       const eq = kv.indexOf('=');

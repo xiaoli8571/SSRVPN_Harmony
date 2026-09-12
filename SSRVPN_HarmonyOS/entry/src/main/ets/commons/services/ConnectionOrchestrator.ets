@@ -21,6 +21,7 @@ import { ClashConfigGenerator } from './ClashConfigGenerator';
 import { Ipv6Detector } from './Ipv6Detector';
 import { DoHResolver } from './DoHResolver';
 import { SubscriptionService } from './SubscriptionService';
+import { SubscriptionRefreshStatus } from '../models/Subscription';
 import { SettingsService, ConnectionSnapshot } from './SettingsService';
 import { SsrvpnNotifier } from './SsrvpnNotifier';
 import { TunnelAuthorityState, resolveAuthority } from './TunnelAuthority';
@@ -656,15 +657,27 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
           return r;
         }
         let okCount = 0;
+        let failedCount = 0;
+        const failedStatuses: string[] = [];
         for (const s of subs.subscriptions) {
           try {
-            await subs.refreshSubscription(s.id);
-            okCount = okCount + 1;
+            const result = await subs.refreshSubscription(s.id);
+            if (result.status === SubscriptionRefreshStatus.OK
+              || result.status === SubscriptionRefreshStatus.NOT_MODIFIED) {
+              okCount = okCount + 1;
+            } else {
+              failedCount = failedCount + 1;
+              failedStatuses.push(result.status);
+              AppLogger.warn(TAG, `[health] refresh ${s.name} failed: ${result.status} ${result.message}`);
+            }
           } catch (e) {
-            AppLogger.warn(TAG, `[health] refresh ${s.name} failed`);
+            failedCount = failedCount + 1;
+            failedStatuses.push('exception');
+            AppLogger.warn(TAG, `[health] refresh ${s.name} failed: ${e instanceof Error ? e.message : String(e)}`);
           }
         }
-        r.text = `已刷新 ${okCount}/${subs.subscriptions.length} 个订阅`;
+        const details = failedStatuses.length > 0 ? `，失败 ${failedCount}（${failedStatuses.join('/')}）` : '';
+        r.text = `已刷新 ${okCount}/${subs.subscriptions.length} 个订阅${details}`;
         return r;
       }
       case RepairActions.RESELECT_NODE: {
@@ -1392,7 +1405,12 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
           AppLogger.warn(TAG, 'no valid node config; auto-refreshing subscriptions');
           for (const s of subs.subscriptions) {
             try {
-              await subs.refreshSubscription(s.id);
+              const refreshResult = await subs.refreshSubscription(s.id);
+              if (refreshResult.status !== SubscriptionRefreshStatus.OK
+                && refreshResult.status !== SubscriptionRefreshStatus.NOT_MODIFIED) {
+                AppLogger.warn(TAG,
+                  `auto refresh ${s.name} failed: ${refreshResult.status} ${refreshResult.message}`);
+              }
             } catch (e) {
               AppLogger.warn(TAG, `auto refresh ${s.name} failed: ${e instanceof Error ? e.message : String(e)}`);
             }

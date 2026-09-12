@@ -18,10 +18,14 @@
 import { preferences } from '@kit.ArkData';
 import { asset } from '@kit.AssetStoreKit';
 import { util } from '@kit.ArkTS';
-import { Subscription, SubscriptionRefreshResult, SubscriptionRefreshStatus } from '../models/Subscription';
+import {
+  Subscription, SubscriptionImportDiagnostics, SubscriptionRefreshResult, SubscriptionRefreshStatus
+} from '../models/Subscription';
 import { ProxyNode, ProxyNodeType, SsrCodec } from '../models/ProxyNode';
 import { SubscriptionParser } from './SubscriptionParser';
-import { SubscriptionFetchPolicy } from './SubscriptionFetchPolicy';
+import {
+  SubscriptionFetchPolicy, SubscriptionFetchError, SubscriptionFetchErrorKind
+} from './SubscriptionFetchPolicy';
 import { YamlMerger, MergedProxy } from './YamlMerger';
 import {
   CredentialStore, CredentialMigrationReport, NodeCredentialValues, SubscriptionCredentialSource,
@@ -442,8 +446,12 @@ export class SubscriptionService {
     return value === '' || value === SubscriptionRefreshStatus.OK
       || value === SubscriptionRefreshStatus.NOT_MODIFIED
       || value === SubscriptionRefreshStatus.NETWORK_ERROR
+      || value === SubscriptionRefreshStatus.HTTP_ERROR
+      || value === SubscriptionRefreshStatus.EMPTY_RESPONSE
+      || value === SubscriptionRefreshStatus.DECODE_ERROR
       || value === SubscriptionRefreshStatus.PARSE_ERROR
-      || value === SubscriptionRefreshStatus.HTTP_ERROR;
+      || value === SubscriptionRefreshStatus.LIMIT_EXCEEDED
+      || value === SubscriptionRefreshStatus.PERSIST_ERROR;
   }
 
   private static mapSubs(json: Object): Subscription[] {
@@ -755,7 +763,7 @@ export class SubscriptionService {
 
       let parsed: ProxyNode[];
       YamlMerger.resetSkipStats();
-      if (body.includes('proxies:')) {
+      if (YamlMerger.proxyItemGroups(body).length > 0) {
         // Clash YAML 订阅：走合并引擎（跨刷新保留节点名称，限额与去重对齐 upstream）
         const prev = this.store !== null ? await this.store.get(`yaml_cache_${id}`, '') as string : '';
         const merged: MergedProxy[] = YamlMerger.merge([body], sub.name, prev);
@@ -779,6 +787,17 @@ export class SubscriptionService {
           '内容未解析出节点（支持 ss/ssr/vless/vmess/trojan/hysteria2/tuic/hysteria '
           + '与 Clash YAML）');
       }
+      if (!SubscriptionFetchPolicy.isNodeCountAllowed(parsed.length)) {
+        sub.lastRefreshResult = SubscriptionRefreshStatus.LIMIT_EXCEEDED;
+        try {
+          await this.persist();
+        } catch (persistError) {
+          return SubscriptionRefreshResult.fail(SubscriptionRefreshStatus.PERSIST_ERROR,
+            `节点超限状态保存失败：${persistError instanceof Error ? persistError.message : String(persistError)}`);
+        }
+        return SubscriptionRefreshResult.fail(SubscriptionRefreshStatus.LIMIT_EXCEEDED,
+          `节点数量 ${parsed.length} 超过 2000 个上限，未写入任何节点`);
+      }
       // 用户手动删除过的节点: 刷新后不再复活
       if (this.hiddenNodes.length > 0) {
         parsed = parsed.filter((n) => !this.hiddenNodes.includes(SubscriptionService.nodeKey(n)));
@@ -788,13 +807,36 @@ export class SubscriptionService {
       sub.nodeCount = parsed.length;
       sub.lastFetchedAt = Date.now();
       sub.lastRefreshResult = SubscriptionRefreshStatus.OK;
-      await this.persist();
+      try {
+        await this.persist();
+      } catch (persistError) {
+        sub.lastRefreshResult = SubscriptionRefreshStatus.PERSIST_ERROR;
+        return SubscriptionRefreshResult.fail(SubscriptionRefreshStatus.PERSIST_ERROR,
+          `节点持久化失败：${persistError instanceof Error ? persistError.message : String(persistError)}`);
+      }
       return SubscriptionRefreshResult.ok(parsed.length);
     } catch (e) {
-      sub.lastRefreshResult = SubscriptionRefreshStatus.NETWORK_ERROR;
-      await this.persist();
       const msg = e instanceof Error ? e.message : String(e);
-      return SubscriptionRefreshResult.fail(SubscriptionRefreshStatus.NETWORK_ERROR, msg);
+      let status = SubscriptionRefreshStatus.PARSE_ERROR;
+      if (e instanceof SubscriptionFetchError) {
+        if (e.kind === SubscriptionFetchErrorKind.HTTP) {
+          status = SubscriptionRefreshStatus.HTTP_ERROR;
+        } else if (e.kind === SubscriptionFetchErrorKind.EMPTY_RESPONSE) {
+          status = SubscriptionRefreshStatus.EMPTY_RESPONSE;
+        } else if (e.kind === SubscriptionFetchErrorKind.DECODE) {
+          status = SubscriptionRefreshStatus.DECODE_ERROR;
+        } else {
+          status = SubscriptionRefreshStatus.NETWORK_ERROR;
+        }
+      }
+      sub.lastRefreshResult = status;
+      try {
+        await this.persist();
+      } catch (persistError) {
+        return SubscriptionRefreshResult.fail(SubscriptionRefreshStatus.PERSIST_ERROR,
+          `刷新失败且状态持久化失败：${persistError instanceof Error ? persistError.message : String(persistError)}`);
+      }
+      return SubscriptionRefreshResult.fail(status, msg);
     }
   }
 
@@ -814,7 +856,8 @@ export class SubscriptionService {
     sub.sortOrder = this.subscriptions.length;
     let parsed: ProxyNode[];
     try {
-      if (trimmed.includes('proxies:')) {
+      YamlMerger.resetSkipStats();
+      if (YamlMerger.proxyItemGroups(trimmed).length > 0) {
         const merged: MergedProxy[] = YamlMerger.merge([trimmed], sub.name, '');
         parsed = SubscriptionService.mergedToNodes(merged, sub.id);
         if (this.store !== null) {
@@ -828,6 +871,10 @@ export class SubscriptionService {
       return 0;
     }
     if (parsed.length === 0) {
+      return 0;
+    }
+    if (!SubscriptionFetchPolicy.isNodeCountAllowed(parsed.length)) {
+      AppLogger.warn(TAG, `local import rejected: ${parsed.length} nodes exceed 2000 limit`);
       return 0;
     }
     if (this.hiddenNodes.length > 0) {
@@ -859,8 +906,13 @@ export class SubscriptionService {
     if (node === null) {
       return 0;
     }
-    const key = `${node.server}:${node.port}:${node.type}`;
-    const exists = this.nodes.some((n) => `${n.server}:${n.port}:${n.type}` === key);
+    const key = `${node.server}:${node.port}:${node.proxyType.length > 0 ? node.proxyType : node.type}`
+      + `:${node.password}:${node.uuid}:${node.rawUri}`;
+    const exists = this.nodes.some((n) => {
+      const existingKey = `${n.server}:${n.port}:${n.proxyType.length > 0 ? n.proxyType : n.type}`
+        + `:${n.password}:${n.uuid}:${n.rawUri}`;
+      return existingKey === key;
+    });
     if (exists) {
       return -1;
     }

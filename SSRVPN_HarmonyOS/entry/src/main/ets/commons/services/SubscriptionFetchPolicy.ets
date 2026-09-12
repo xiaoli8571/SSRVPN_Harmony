@@ -41,12 +41,30 @@ export class SubscriptionFetchResult {
   userInfo: SubscriptionUserInfo = new SubscriptionUserInfo();
 }
 
+export enum SubscriptionFetchErrorKind {
+  NETWORK = 'network',
+  HTTP = 'http',
+  EMPTY_RESPONSE = 'emptyResponse',
+  DECODE = 'decode'
+}
+
+/** 保留拉取失败边界，供 SubscriptionService 映射为准确的刷新状态。 */
+export class SubscriptionFetchError extends Error {
+  kind: SubscriptionFetchErrorKind;
+
+  constructor(kind: SubscriptionFetchErrorKind, message: string) {
+    super(message);
+    this.kind = kind;
+  }
+}
+
 export class SubscriptionFetchPolicy {
   /** 依次尝试 UA 链，返回第一个非空响应体。HTTP 仅在调用方显式接受风险时启用。 */
   static async fetch(urlStr: string, headerName: string, headerValue: string,
     allowInsecureHttp: boolean = false): Promise<SubscriptionFetchResult> {
     if (!SubscriptionFetchPolicy.isValidSubscriptionUrl(urlStr, allowInsecureHttp)) {
-      throw new Error('订阅地址无效：仅允许公开 HTTPS 地址');
+      throw new SubscriptionFetchError(SubscriptionFetchErrorKind.HTTP,
+        '订阅地址无效：仅允许公开 HTTPS 地址');
     }
     const customHeader = headerName.length > 0 && headerValue.length > 0;
     const attempts: string[] = [];
@@ -72,7 +90,21 @@ export class SubscriptionFetchPolicy {
         attempts.push(msg);
       }
     }
-    throw new Error(`订阅拉取失败（${SubscriptionFetchPolicy.redactUrl(urlStr)}）：${attempts.slice(0, 2).join(' / ')}`);
+    const summary = attempts.slice(0, 2).join(' / ');
+    if (attempts.length > 0 && attempts.every((item: string) => item === '响应为空')) {
+      throw new SubscriptionFetchError(SubscriptionFetchErrorKind.EMPTY_RESPONSE,
+        `订阅响应为空（${SubscriptionFetchPolicy.redactUrl(urlStr)}）`);
+    }
+    if (attempts.some((item: string) => item.startsWith('HTTP '))) {
+      throw new SubscriptionFetchError(SubscriptionFetchErrorKind.HTTP,
+        `订阅 HTTP 请求失败（${SubscriptionFetchPolicy.redactUrl(urlStr)}）：${summary}`);
+    }
+    if (attempts.some((item: string) => item.includes('解码失败'))) {
+      throw new SubscriptionFetchError(SubscriptionFetchErrorKind.DECODE,
+        `订阅响应解码失败（${SubscriptionFetchPolicy.redactUrl(urlStr)}）：${summary}`);
+    }
+    throw new SubscriptionFetchError(SubscriptionFetchErrorKind.NETWORK,
+      `订阅拉取失败（${SubscriptionFetchPolicy.redactUrl(urlStr)}）：${summary}`);
   }
 
   private static async requestWithRedirectValidation(urlStr: string, headers: Record<string, string>,
@@ -102,7 +134,7 @@ export class SubscriptionFetchPolicy {
           nextUrl, SubscriptionFetchPolicy.redirectHeaders(headers, nextUrl), allowInsecureHttp, redirectCount + 1);
       }
       if (resp.responseCode !== 200) {
-        throw new Error(`HTTP ${resp.responseCode}`);
+        throw new SubscriptionFetchError(SubscriptionFetchErrorKind.HTTP, `HTTP ${resp.responseCode}`);
       }
       let bytes = 0;
       let body = '';
@@ -111,7 +143,12 @@ export class SubscriptionFetchPolicy {
         if (!SubscriptionFetchPolicy.isResponseSizeAllowed(bytes)) {
           throw new Error('订阅响应体超过 8 MiB 限制');
         }
-        body = util.TextDecoder.create('utf-8').decodeToString(new Uint8Array(resp.result));
+        try {
+          body = util.TextDecoder.create('utf-8').decodeToString(new Uint8Array(resp.result));
+        } catch (e) {
+          throw new SubscriptionFetchError(SubscriptionFetchErrorKind.DECODE,
+            `响应 UTF-8 解码失败：${e instanceof Error ? e.message : String(e)}`);
+        }
       } else if (typeof resp.result === 'string') {
         body = resp.result as string;
         bytes = body.length;

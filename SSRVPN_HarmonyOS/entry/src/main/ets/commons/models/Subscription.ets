@@ -79,8 +79,52 @@ export enum SubscriptionRefreshStatus {
   OK = 'ok',
   NOT_MODIFIED = 'notModified',
   NETWORK_ERROR = 'networkError',
+  HTTP_ERROR = 'httpError',
+  EMPTY_RESPONSE = 'emptyResponse',
+  DECODE_ERROR = 'decodeError',
   PARSE_ERROR = 'parseError',
-  HTTP_ERROR = 'httpError'
+  LIMIT_EXCEEDED = 'limitExceeded',
+  PERSIST_ERROR = 'persistError'
+}
+
+/** 三种导入入口共用的诊断统计，所有跳过原因均显式可见。 */
+export class SubscriptionImportDiagnostics {
+  inputCount: number = 0;
+  addedCount: number = 0;
+  duplicateCount: number = 0;
+  invalidCount: number = 0;
+  unsupportedCount: number = 0;
+  hiddenCount: number = 0;
+  limitCount: number = 0;
+  unsupportedTypes: string = '';
+
+  skippedCount(): number {
+    return this.duplicateCount + this.invalidCount + this.unsupportedCount
+      + this.hiddenCount + this.limitCount;
+  }
+
+  summary(): string {
+    const details: string[] = [];
+    if (this.duplicateCount > 0) {
+      details.push(`重复 ${this.duplicateCount}`);
+    }
+    if (this.invalidCount > 0) {
+      details.push(`无效 ${this.invalidCount}`);
+    }
+    if (this.unsupportedCount > 0) {
+      const types = this.unsupportedTypes.length > 0 ? `（${this.unsupportedTypes}）` : '';
+      details.push(`不支持 ${this.unsupportedCount}${types}`);
+    }
+    if (this.hiddenCount > 0) {
+      details.push(`已隐藏 ${this.hiddenCount}`);
+    }
+    if (this.limitCount > 0) {
+      details.push(`超限 ${this.limitCount}`);
+    }
+    const skipped = this.skippedCount();
+    return `成功 ${this.addedCount}，跳过 ${skipped}`
+      + (details.length > 0 ? `（${details.join('，')}）` : '');
+  }
 }
 
 /** 刷新结果分类，移植自 subscription_refresh_result.dart */
@@ -88,18 +132,28 @@ export class SubscriptionRefreshResult {
   status: SubscriptionRefreshStatus = SubscriptionRefreshStatus.OK;
   message: string = '';
   nodeCount: number = 0;
+  diagnostics: SubscriptionImportDiagnostics = new SubscriptionImportDiagnostics();
 
-  static ok(nodeCount: number): SubscriptionRefreshResult {
+  static ok(nodeCount: number, diagnostics?: SubscriptionImportDiagnostics): SubscriptionRefreshResult {
     const r = new SubscriptionRefreshResult();
     r.status = SubscriptionRefreshStatus.OK;
     r.nodeCount = nodeCount;
+    if (diagnostics !== undefined) {
+      r.diagnostics = diagnostics;
+    } else {
+      r.diagnostics.addedCount = nodeCount;
+    }
     return r;
   }
 
-  static fail(status: SubscriptionRefreshStatus, message: string): SubscriptionRefreshResult {
+  static fail(status: SubscriptionRefreshStatus, message: string,
+    diagnostics?: SubscriptionImportDiagnostics): SubscriptionRefreshResult {
     const r = new SubscriptionRefreshResult();
     r.status = status;
     r.message = message;
+    if (diagnostics !== undefined) {
+      r.diagnostics = diagnostics;
+    }
     return r;
   }
 }

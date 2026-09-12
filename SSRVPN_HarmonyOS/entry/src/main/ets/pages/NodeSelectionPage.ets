@@ -542,7 +542,8 @@ struct NodeSelectionPage {
       let total = 0;
       for (const s of this.subs.subscriptions) {
         const r = await this.subs.refreshSubscription(s.id);
-        if (r.status === SubscriptionRefreshStatus.OK) {
+        if (r.status === SubscriptionRefreshStatus.OK
+          || r.status === SubscriptionRefreshStatus.NOT_MODIFIED) {
           ok = ok + 1;
           total = total + r.nodeCount;
         }

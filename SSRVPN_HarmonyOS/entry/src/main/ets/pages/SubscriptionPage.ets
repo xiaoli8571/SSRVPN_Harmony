@@ -884,6 +884,7 @@ struct SubscriptionPage {
       const result = await this.service.refreshSubscription(sub.id);
       this.reload();
       const message = result.status === SubscriptionRefreshStatus.OK
+        || result.status === SubscriptionRefreshStatus.NOT_MODIFIED
         ? `${sub.name} 刷新成功，共 ${result.nodeCount} 个节点`
         : `${sub.name} 刷新失败：${result.message.length > 0 ? result.message : result.status}`;
       this.showError(message);
@@ -909,7 +910,8 @@ struct SubscriptionPage {
       }
       this.refreshingSubscriptionIds = [s.id];
       const r = await this.service.refreshSubscription(s.id);
-      if (r.status === SubscriptionRefreshStatus.OK) {
+      if (r.status === SubscriptionRefreshStatus.OK
+        || r.status === SubscriptionRefreshStatus.NOT_MODIFIED) {
         ok = ok + 1;
         total = total + r.nodeCount;
       } else {
