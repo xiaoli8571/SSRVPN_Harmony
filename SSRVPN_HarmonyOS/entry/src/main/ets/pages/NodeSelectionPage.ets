@@ -616,7 +616,10 @@ struct NodeSelectionPage {
    */
   private async testNodeDelay(node: ProxyNode, timeoutMs: number): Promise<number> {
     if (!(this.isConnected || this.testCoreOk)) {
-      return DirectLatencyTester.testNode(node);
+      // 直连兜底也必须服从调用方超时。此前批量路径传入 1500ms，但
+      // DirectLatencyTester 内部仍可能等待 4~7 秒，导致最后几个超时节点
+      // 拖住 Promise.all，出现“结果都出来了但测速迟迟不结束”的长尾。
+      return DirectLatencyTester.testNode(node, timeoutMs);
     }
     if (this.latencyRoundUrl.length === 0) {
       this.resetLatencyUrlRound();
@@ -811,7 +814,6 @@ struct NodeSelectionPage {
           Text('←')
             .fontSize(22).fontColor(Ui.textPrimary)
             .onClick(() => router.back())
-          Blank()
           Row({ space: 7 }) {
             CountryFlagIcon({
               nodeName: this.selectedName.length > 0 ? this.selectedName : 'UN',
@@ -824,9 +826,11 @@ struct NodeSelectionPage {
               .fontColor(Ui.textPrimary)
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .constraintSize({ maxWidth: 220 })
+              .layoutWeight(1)
           }
-          Blank()
+          .layoutWeight(1)
+          .constraintSize({ minWidth: 0 })
+          .margin({ left: 12, right: 12 })
           // 刷新(重载节点/订阅) + 排序方式 + 闪电(测速) 图标组
           Row({ space: 14 }) {
             Text(this.refreshing ? '◌' : '⟳')

@@ -275,7 +275,9 @@ export class NodeProtocolPolicy {
   /** 提取协议键（小写）。未知返回 '' */
   static protocolKey(proxyType: string, typeValue: string, realityPubKey: string): string {
     const p = proxyType.length > 0 ? proxyType.toLowerCase() : '';
-    if (p === 'vless' || p === 'vmess' || p === 'trojan' || p === 'hysteria2') {
+    if (p === 'vless' || p === 'vmess' || p === 'trojan' || p === 'hysteria2'
+      || p === 'tuic' || p === 'anytls' || p === 'naive' || p === 'shadowtls'
+      || p === 'shadow-tls' || p === 'wireguard') {
       // hysteria2 / hy2 统一规范化为 hysteria2
       return p;
     }
@@ -315,12 +317,23 @@ export class NodeProtocolPolicy {
         return new NodeProtocolInfo('trojan', 'TROJAN', false);
       case 'hysteria2':
         return new NodeProtocolInfo('hysteria2', 'HYSTERIA2', false);
+      case 'tuic':
+        return new NodeProtocolInfo('tuic', 'TUIC', false);
+      case 'anytls':
+        return new NodeProtocolInfo('anytls', 'AnyTLS', false);
+      case 'naive':
+        return new NodeProtocolInfo('naive', 'Naive', false);
+      case 'shadowtls':
+      case 'shadow-tls':
+        return new NodeProtocolInfo('shadowtls', 'ShadowTLS', false);
+      case 'wireguard':
+        return new NodeProtocolInfo('wireguard', 'WireGuard', false);
       case 'ss':
         return new NodeProtocolInfo('ss', 'SS', false);
       case 'ssr':
         return new NodeProtocolInfo('ssr', 'SSR', false);
       default:
-        return new NodeProtocolInfo('', '未知', false);
+        return new NodeProtocolInfo(key, key.length > 0 ? key.toUpperCase() : '未知', false);
     }
   }
 

@@ -628,7 +628,8 @@ export class YamlMerger {
 
   /** mihomo 原生支持、但本客户端无结构化槽位的协议: 校验后整条中继, 不丢弃。 */
   private static readonly RELAY_TYPES: Set<string> = new Set<string>([
-    'tuic', 'hysteria', 'http', 'socks5', 'snell', 'anytls', 'ssh', 'mieru', 'wireguard'
+    'tuic', 'hysteria', 'http', 'socks5', 'snell', 'anytls', 'naive', 'shadowtls',
+    'shadow-tls', 'ssh', 'mieru', 'wireguard'
   ]);
 
   /** 支持 alpn 的协议 (ss/ssr 不支持 alpn 键) */
@@ -661,9 +662,14 @@ export class YamlMerger {
     }
   }
 
-  /** 保留字检查: 中继协议没有结构化槽位, 全部字段走 extraOpts */
+  /**
+   * 无结构化槽位的协议全部按安全中继处理。显式集合记录已验证协议，合法的未知
+   * type 同样保留核心字段与 extraOpts，避免订阅升级后节点被静默丢弃。
+   */
   static isRelayType(type: string): boolean {
-    return YamlMerger.RELAY_TYPES.has(type.trim().toLowerCase());
+    const normalized = type.trim().toLowerCase();
+    return YamlMerger.RELAY_TYPES.has(normalized)
+      || /^[a-z][a-z0-9-]{0,31}$/.test(normalized);
   }
 
   /** 该协议是否支持 alpn 键 */
@@ -870,7 +876,7 @@ export class YamlMerger {
     }
     if (proxyType !== 'ss' && proxyType !== 'ssr' && proxyType !== 'vless'
       && proxyType !== 'vmess' && proxyType !== 'trojan' && proxyType !== 'hysteria2'
-      && !YamlMerger.RELAY_TYPES.has(proxyType)) {
+      && !YamlMerger.isRelayType(proxyType)) {
       // 记录被跳过的协议类型, 由订阅刷新流程提示用户(不再静默丢弃)
       YamlMerger.noteSkipped(proxyType);
       throw new YamlNodeError(`不支持的代理类型：${proxyType}`);

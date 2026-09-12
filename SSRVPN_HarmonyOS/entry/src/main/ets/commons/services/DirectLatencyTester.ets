@@ -32,7 +32,7 @@ export class DirectLatencyTester {
    *     "端口开着但 TLS 层已死"的假活节点误判为正常
    *   - 其余(ss/ssr/明文) → TCP 握手(无更高层可探, 结果仅代表服务器可达)
    */
-  static async testNode(node: ProxyNode): Promise<number> {
+  static async testNode(node: ProxyNode, timeoutMs: number = 5000): Promise<number> {
     if (node.server.length === 0 || node.port <= 0 || node.port >= 65536) {
       return -1;
     }
@@ -40,13 +40,13 @@ export class DirectLatencyTester {
       if (node.obfs.length > 0) {
         return -2;
       }
-      return DirectLatencyTester.probeQuic(node);
+      return DirectLatencyTester.probeQuic(node, timeoutMs);
     }
     if (node.tls && node.realityPublicKey.length === 0) {
       // reality 节点对非 uTLS 指纹的裸 ClientHello 可能静默不回包, 误杀率高, 走 TCP
-      return DirectLatencyTester.probeTls(node);
+      return DirectLatencyTester.probeTls(node, timeoutMs);
     }
-    return DirectLatencyTester.probeTcp(node);
+    return DirectLatencyTester.probeTcp(node, timeoutMs);
   }
 
   /** 组装带 SNI 的 TLS1.2/1.3 ClientHello（任何合规 TLS 栈都必须回包） */
@@ -104,7 +104,7 @@ export class DirectLatencyTester {
   }
 
   /** TLS 探测: TCP 连接 + ClientHello, 收到任何回包(ServerHello/Alert)才算存活 */
-  private static probeTls(node: ProxyNode): Promise<number> {
+  private static probeTls(node: ProxyNode, timeoutMs: number): Promise<number> {
     const tcp = socket.constructTCPSocketInstance();
     const sni = node.servername.length > 0 ? node.servername : node.server;
     const ch = DirectLatencyTester.buildClientHello(sni);
@@ -137,7 +137,7 @@ export class DirectLatencyTester {
       });
       tcp.connect({
         address: { address: node.server, port: node.port, family: 1 },
-        timeout: TCP_TIMEOUT_MS
+        timeout: Math.min(TCP_TIMEOUT_MS, timeoutMs)
       } as socket.TCPConnectOptions).then(() => {
         tcp.send({ data: ch } as socket.TCPSendOptions).catch(() => {
           finish(-1);
@@ -149,19 +149,19 @@ export class DirectLatencyTester {
       // concurrent probe. Socket completion cancels it immediately.
       timerId = setTimeout(() => {
         finish(-1);
-      }, TCP_TIMEOUT_MS + TLS_TIMEOUT_MS);
+      }, Math.min(TCP_TIMEOUT_MS + TLS_TIMEOUT_MS, timeoutMs));
     });
   }
 
   /** TCP 握手探测（原实现） */
-  private static async probeTcp(node: ProxyNode): Promise<number> {
+  private static async probeTcp(node: ProxyNode, timeoutMs: number): Promise<number> {
     const start = Date.now();
     let tcpSocket: socket.TCPSocket | null = null;
     try {
       tcpSocket = socket.constructTCPSocketInstance();
       await tcpSocket.connect({
         address: { address: node.server, port: node.port, family: 1 },
-        timeout: TCP_TIMEOUT_MS
+        timeout: Math.min(TCP_TIMEOUT_MS, timeoutMs)
       });
       const elapsed = Date.now() - start;
       try {
@@ -207,7 +207,7 @@ export class DirectLatencyTester {
   }
 
   /** hy2 QUIC 探测：收到任何 UDP 回包即计 RTT；超时 -1 */
-  private static probeQuic(node: ProxyNode): Promise<number> {
+  private static probeQuic(node: ProxyNode, timeoutMs: number): Promise<number> {
     const udp = socket.constructUDPSocketInstance();
     const payload = DirectLatencyTester.buildQuicInitial();
     const start = Date.now();
@@ -251,7 +251,7 @@ export class DirectLatencyTester {
       // timer callbacks and short-lived closures during batch node tests.
       timerId = setTimeout(() => {
         finish(-1);
-      }, QUIC_TIMEOUT_MS);
+      }, Math.min(QUIC_TIMEOUT_MS, timeoutMs));
     });
   }
 
