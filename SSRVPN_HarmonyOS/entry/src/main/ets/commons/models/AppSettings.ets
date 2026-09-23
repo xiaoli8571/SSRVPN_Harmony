@@ -54,7 +54,8 @@ export class AppSettingsJson {
   preferredNodeSubscriptionId: string = '';
   autoUpdateSubscription: boolean = true;
   selectedSubscriptionId: string = '';
-  testLatencyUrl: string = 'https://www.gstatic.com/generate_204';
+  /** 节点测速地址。出厂默认对齐主流客户端（CFW/CMFA/v2rayN）的 http generate_204。 */
+  testLatencyUrl: string = 'http://www.gstatic.com/generate_204';
   proxyMode: string = 'rule';
   /** 节点列表排序模式: 'default' 订阅默认顺序 / 'auto' 按最近测速结果 / 'manual' 用户手动固定顺序 */
   nodeSortMode: string = 'default';
@@ -90,6 +91,10 @@ export class AppSettingsJson {
 }
 
 export class AppSettings {
+  /** 出厂默认测速地址（对齐主流 Clash 客户端的 http generate_204）。 */
+  static readonly DEFAULT_TEST_LATENCY_URL: string = 'http://www.gstatic.com/generate_204';
+  /** 强制 HTTPS 时期的出厂值：fromJson 见到它即迁移到新默认。 */
+  static readonly LEGACY_TEST_LATENCY_URL: string = 'https://www.gstatic.com/generate_204';
   /** 跟随系统 / 暗色 / 亮色 */
   themeMode: number = 0; // 0=system, 1=dark, 2=light
   autoConnectOnBoot: boolean = true;
@@ -108,7 +113,8 @@ export class AppSettings {
   preferredNodeSubscriptionId: string = '';
   autoUpdateSubscription: boolean = true;
   selectedSubscriptionId: string = '';
-  testLatencyUrl: string = 'https://www.gstatic.com/generate_204';
+  /** 节点测速地址。出厂默认对齐主流客户端（CFW/CMFA/v2rayN）的 http generate_204。 */
+  testLatencyUrl: string = 'http://www.gstatic.com/generate_204';
   /** 代理模式：rule = 规则 / global = 全局（对应 upstream settings.proxyMode） */
   proxyMode: string = 'rule';
   /** 节点列表排序模式: 'default'=订阅默认顺序, 'auto'=按最近测速结果, 'manual'=手动固定顺序 */
@@ -216,8 +222,13 @@ export class AppSettings {
       ? j.preferredNodeSubscriptionId : '';
     s.autoUpdateSubscription = typeof j.autoUpdateSubscription === 'boolean' ? j.autoUpdateSubscription : true;
     s.selectedSubscriptionId = typeof j.selectedSubscriptionId === 'string' ? j.selectedSubscriptionId : '';
-    s.testLatencyUrl = typeof j.testLatencyUrl === 'string' && j.testLatencyUrl.length > 0
-      ? j.testLatencyUrl : 'https://www.gstatic.com/generate_204';
+    // 测速 URL：设置页没有该字段的编辑入口，存量配置里出现的必是旧出厂值
+    // （强制 HTTPS 时期的 https gstatic）—— 迁到新出厂默认（对齐主流客户端的
+    // http generate_204），否则本次对齐对老用户不生效。空值/缺失同样取新默认。
+    s.testLatencyUrl = typeof j.testLatencyUrl === 'string'
+      && j.testLatencyUrl.length > 0
+      && j.testLatencyUrl !== AppSettings.LEGACY_TEST_LATENCY_URL
+      ? j.testLatencyUrl : AppSettings.DEFAULT_TEST_LATENCY_URL;
     s.proxyMode = j.proxyMode === 'global' ? 'global' : 'rule';
     s.nodeSortMode = NodeSortModes.normalize(j.nodeSortMode);
     s.nodeSortSnapshot = typeof j.nodeSortSnapshot === 'string' ? j.nodeSortSnapshot : '';

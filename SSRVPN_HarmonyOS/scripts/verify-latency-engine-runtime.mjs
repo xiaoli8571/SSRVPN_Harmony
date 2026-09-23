@@ -233,7 +233,7 @@ const { ConnectionOrchestrator } = await import(pathToFileURL(path.join(stage, '
 const { ProxyNode } = await import(pathToFileURL(path.join(stage, 'ProxyNode.ts')).href);
 const { DirectLatencyTester } = await import(pathToFileURL(path.join(stage, 'DirectLatencyTester.ts')).href);
 
-const URL_ = 'https://www.gstatic.com/generate_204';
+const URL_ = 'http://www.gstatic.com/generate_204';
 function nodes(n) {
   const out = [];
   for (let i = 0; i < n; i++) out.push(new ProxyNode('node-' + i, '1.2.3.' + (i % 250 + 1)));
@@ -277,7 +277,7 @@ await checkAsync('并发严格不超过 LATENCY_CONCURRENCY（真跑 worker 池�
 });
 
 // ── 2. 每个探测都带 URL 与 timeout（契约：timeout 必传且 <=32767） ─────────
-await checkAsync('每个探测都显式带 HTTPS url 与合法 timeout', async () => {
+await checkAsync('每个探测都显式带 http url 与合法 timeout', async () => {
   fresh();
   ClashApiService.handler = async () => probeResult(50);
   const run = LatencyEngine.start(new ClashApiService(), nodes(6), URL_, opts({ timeoutMs: 5000 }));
@@ -285,7 +285,8 @@ await checkAsync('每个探测都显式带 HTTPS url 与合法 timeout', async (
   LatencyEngine.release(run);
   for (const c of ClashApiService.calls) {
     eq(c.url, URL_, 'url passed through');
-    ok(c.url.startsWith('https://'), 'must be https (unified-delay + hijacking proxies)');
+    ok(c.url.startsWith('http://'),
+      'must be http (mainstream client default; avoids per-probe TLS handshake through the node)');
     ok(c.timeoutMs > 0 && c.timeoutMs <= 32767, `timeout ${c.timeoutMs} must be 1..32767`);
   }
 });

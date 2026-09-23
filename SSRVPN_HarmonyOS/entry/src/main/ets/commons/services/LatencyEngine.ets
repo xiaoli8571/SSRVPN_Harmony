@@ -71,9 +71,22 @@ export const FRESH_RESULT_MS = 5 * 60 * 1000;
  */
 export const LATENCY_CORE_IDLE_MS = 90000;
 
-/** 统一用 HTTPS：unified-delay 开启时 http:// URL 在劫持型代理下会失败（mihomo 官方警告）。 */
-export const LATENCY_TEST_URL = 'https://www.gstatic.com/generate_204';
-export const LATENCY_TEST_URL_ALT = 'https://cp.cloudflare.com/generate_204';
+/**
+ * 默认测速 URL：**http** 的 generate_204 —— 对齐主流 Clash 客户端的出厂默认
+ * （CFW `cfw-latency-url`、ClashMetaForAndroid、v2rayN、clash-linux 脚本均是
+ * `http://www.gstatic.com/generate_204`），也与本仓 `tools/true-chain-harness/*`
+ * 真机探针的 URL 取值一致。
+ *
+ * 为什么弃用此前的强制 HTTPS（用户反馈"正常节点测出超时"的主因）：
+ *  - 内核 `(*Proxy).URLTest` 对 https URL 要**过节点**做一次 TLS 握手，`unified-delay`
+ *    下还发两次 HEAD；受限出口（TLS 分片/SNI 干扰/回国节点）上握手会挂起直到
+ *    context 预算耗尽 → `getProxyDelay` 回 504 → UI 把好节点标成"超时"。
+ *  - http 的 generate_204 是极小的 1-RTT 交换、无 TLS，同一条健康节点上更少失败面。
+ *  - 当初改 HTTPS 依据的 mihomo 官方警告在捆绑内核里是**非致命**的：第二次 HEAD
+ *    失败只打日志并回退用第一次响应，测试不会因此失败。
+ */
+export const LATENCY_TEST_URL = 'http://www.gstatic.com/generate_204';
+export const LATENCY_TEST_URL_ALT = 'http://cp.cloudflare.com/generate_204';
 
 /** 进度快照（UI 直接绑定） */
 export class LatencyProgress {

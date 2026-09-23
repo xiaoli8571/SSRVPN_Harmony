@@ -639,19 +639,19 @@ struct NodeSelectionPage {
   /**
    * 本批使用的测速 URL。
    *
-   * 尊重用户在设置里的 `testLatencyUrl`（旧实现也是这么做的，只是同时挂着 3 个
-   * fallback 和整批级降级机制 —— 那套机制已删除，因为主流客户端**没有一个**做 URL
-   * 轮换，失败通常意味着节点本身不通，而不是 URL 被针对）。
-   * 但**强制 HTTPS**：`unified-delay` 开启时 mihomo 会发两次 HEAD，官方明确警告
-   * `http://` 这类 URL 在劫持型代理下会失败；用户若填了 http 就回落到默认 HTTPS。
+   * 尊重用户在设置里的 `testLatencyUrl`（http 与 https 均接受）—— 主流客户端没有
+   * 一个强制改写用户配置的测速 URL；此前"非 https 一律回落"的覆盖逻辑已删除，
+   * 它把 CFW/CMFA/v2rayN 等同款的 `http://www.gstatic.com/generate_204` 出厂默认
+   * 拦截成 HTTPS，而过节点的 TLS 握手挂起正是"正常节点测出 504 超时"的主因。
+   * 仅当配置为空或不是 http(s) 地址时回落到引擎默认。
    */
   private testUrlForLatency(): string {
     const configured: string = this.settings.testLatencyUrl.trim();
-    if (configured.startsWith('https://')) {
+    if (configured.startsWith('http://') || configured.startsWith('https://')) {
       return configured;
     }
     if (configured.length > 0) {
-      AppLogger.warn(TAG, `test url "${configured}" is not https; falling back to ${LATENCY_TEST_URL}`);
+      AppLogger.warn(TAG, `test url "${configured}" is not http(s); falling back to ${LATENCY_TEST_URL}`);
     }
     return LATENCY_TEST_URL;
   }

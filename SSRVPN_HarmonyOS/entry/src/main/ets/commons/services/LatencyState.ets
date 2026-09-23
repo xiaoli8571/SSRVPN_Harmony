@@ -123,7 +123,13 @@ export class LatencyRecord {
  */
 export class LatencyPolicy {
   /** 5000ms 是 mihomo 内部默认（NewHealthCheck 的兜底）；移动端不再更低。 */
-  static readonly DEFAULT_TIMEOUT_MS: number = 5000;
+  /**
+   * 8000ms 对齐主流客户端出厂默认：Clash for Windows `cfw-latency-timeout: 8000`
+   * （v2rayN 用 10000），也是本仓 `tools/true-chain-harness/*` 真机探针的取值。
+   * 此前 5000ms 是 mihomo NewHealthCheck 兜底值，对"慢而活"的节点偏紧。
+   * 上限受 mihomo timeout 的 16 位解析约束（≤32767）。
+   */
+  static readonly DEFAULT_TIMEOUT_MS: number = 8000;
   /** mihomo 的 timeout 用 16 位整数解析，> 32767 直接 400。 */
   static readonly MAX_TIMEOUT_MS: number = 30000;
   /** 结果视为"旧"的阈值：超过即灰显，提示用户可能不准 */

@@ -13,7 +13,8 @@
  *  2. **禁止 `/group/{name}/delay`**：真机 + mihomo 源码确认它会忽略传入 url、
  *     对非 Selector 组 ForceSet("") 清掉用户固定选择、无并发上限、失败节点静默消失
  *  3. 未连接测速路径不得再直接 `ensureTestCore`（改由 `ensureLatencyApi` 统一决策）
- *  4. 测速 URL 必须是 HTTPS（unified-delay 下 http:// 在劫持型代理里会失败）
+ *  4. 测速 URL 默认必须是 http 的 generate_204（对齐 CFW/CMFA/v2rayN 等主流
+ *     客户端出厂默认；过节点的 TLS 握手挂起会把好节点误判成 504 超时）
  *  5. 并发上限存在且有界（内核侧无上限，客户端必须自律）
  *  6. `timeout` 必须显式传且 ≤ 32767（mihomo 按 16 位解析，超限 400）
  *  7. 整批硬截止后剩余节点保持"未测"，绝不写成超时
@@ -131,16 +132,26 @@ check('后台静默测速也走同一引擎（不再是第二套实现）', () =
     'background must not keep its own parallel pipeline');
 });
 
-// ── 4. 测速 URL 必须 HTTPS ────────────────────────────────────────────────
-check('默认测速 URL 是 HTTPS 的 generate_204', () => {
-  assert.ok(/LATENCY_TEST_URL\s*=\s*'https:\/\/www\.gstatic\.com\/generate_204'/.test(engine),
-    'primary test url must be https://www.gstatic.com/generate_204');
-  assert.ok(/LATENCY_TEST_URL_ALT\s*=\s*'https:\/\//.test(engine), 'alt test url must be https');
+// ── 4. 测速 URL 对齐主流客户端（http generate_204）─────────────────────────
+check('默认测速 URL 是 http 的 generate_204（对齐 CFW/CMFA/v2rayN）', () => {
+  assert.ok(/LATENCY_TEST_URL\s*=\s*'http:\/\/www\.gstatic\.com\/generate_204'/.test(engine),
+    'primary test url must be http://www.gstatic.com/generate_204');
+  assert.ok(/LATENCY_TEST_URL_ALT\s*=\s*'http:\/\//.test(engine), 'alt test url must be http');
 });
-check('AppSettings 默认测速 URL 也是 HTTPS', () => {
+check('AppSettings 默认测速 URL 是 http，且旧 HTTPS 出厂值会被迁移', () => {
   const settings = fs.readFileSync(rel('entry/src/main/ets/commons/models/AppSettings.ets'), 'utf8');
-  assert.ok(!/testLatencyUrl[^=]*=\s*'http:\/\//.test(settings),
-    'AppSettings default test url must not be plain http');
+  assert.ok(/testLatencyUrl[^=\n]*=\s*'http:\/\/www\.gstatic\.com\/generate_204'/.test(settings),
+    'AppSettings default test url must be http://www.gstatic.com/generate_204');
+  // 存量配置里只有旧出厂值（设置页无编辑入口）→ 必须在 fromJson 迁到新默认
+  assert.ok(/LEGACY_TEST_LATENCY_URL/.test(settings) && /DEFAULT_TEST_LATENCY_URL/.test(settings),
+    'legacy https default must be migrated to the new http default');
+});
+check('页面不得再强制把 http 测速 URL 改写成 https', () => {
+  const page = fs.readFileSync(rel('entry/src/main/ets/pages/NodeSelectionPage.ets'), 'utf8');
+  assert.ok(!/is not https; falling back/.test(page),
+    'NodeSelectionPage must not override a user http test url back to https');
+  assert.ok(/startsWith\('http:\/\/'\) \|\| configured\.startsWith\('https:\/\/'\)/.test(page),
+    'testUrlForLatency must accept both http and https as configured');
 });
 
 // ── 5. 并发上限 ───────────────────────────────────────────────────────────
@@ -376,7 +387,7 @@ check('ClashConfigGenerator 逐字节未变（除 unified-delay 以外本次不�
   assert.strictEqual(hash, expected,
     `ClashConfigGenerator changed (${hash} != ${expected}); if intentional, update latency-gen-fingerprint.json`);
 });
-check('生成器仍启用 unified-delay（测速 URL 必须 HTTPS 的原因）', () => {
+check('生成器仍启用 unified-delay（第二次 HEAD 只计热 RTT，测速更准）', () => {
   const gen = fs.readFileSync(rel(svc + 'ClashConfigGenerator.ets'), 'utf8');
   assert.ok(/unified-delay: true/.test(gen), 'unified-delay must stay enabled');
 });
