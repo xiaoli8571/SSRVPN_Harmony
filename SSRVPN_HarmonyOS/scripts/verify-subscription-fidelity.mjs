@@ -44,18 +44,25 @@ function countBy(list, fn) {
   for (const x of list) out[fn(x)] = (out[fn(x)] || 0) + 1;
   return out;
 }
+function eq(a, b, label) {
+  if (JSON.stringify(a) !== JSON.stringify(b)) {
+    throw new Error(`${label}: expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`);
+  }
+}
 
 // ── fixture ───────────────────────────────────────────────────────────────
 const fixtureArg = process.argv[2] !== undefined ? process.argv[2] : '';
 const defaultFixture = path.join(appRoot, 'test/fixtures/real-subscription.yaml');
 const fixturePath = fixtureArg.length > 0 ? fixtureArg
   : (fs.existsSync(defaultFixture) ? defaultFixture : '');
-if (fixturePath.length === 0 || !fs.existsSync(fixturePath)) {
+// 无真实订阅 fixture：不算失败，但 P0 修复（混合订阅/ss plugin/SIP008/
+// wireguard URI）必须有**始终执行**的真跑回归 —— 暂存照做，import 成功后
+// 用真解析器跑合成核心用例（runSyntheticCore），不跑真订阅对账段。
+const noFixture = fixturePath.length === 0 || !fs.existsSync(fixturePath);
+if (noFixture) {
   console.log('SKIP: no real subscription fixture (pass a YAML path as argv[2])');
-  console.log('0 passed, 0 failed, 0 run');
-  process.exit(0);
 }
-const rawYaml = fs.readFileSync(fixturePath, 'utf8');
+const rawYaml = noFixture ? '' : fs.readFileSync(fixturePath, 'utf8');
 
 // ── mihomo 口径的基线：独立于被测代码，只提取结构 ─────────────────────────
 function fieldOf(text, key) {
@@ -190,7 +197,10 @@ export const util = {
   TextDecoder: Decoder,
   TextEncoder: Encoder,
   Base64Helper: Base64Helper,
-  base64Helper: new Base64Helper()
+  base64Helper: new Base64Helper(),
+  // SsrCodec.decodeBase64Url 会读 util.Type.MIME / Type.BASIC（真实 ArkTS 常量），
+  // 缺了会在 decodeSync 参数求值时抛 TypeError，被 catch 吞掉 → 解码永远返回空串。
+  Type: { MIME: 0, BASIC: 1 }
 };
 `;
 w('util.ts', utilStub);
@@ -205,21 +215,126 @@ for (const f of fs.readdirSync(stage)) {
 }
 
 let Parser = null;
+let Merger = null;
 let importError = '';
 try {
   const mod = await import(`file://${path.join(stage, 'SubscriptionParser.ts').replace(/\\/g, '/')}`);
   Parser = mod.SubscriptionParser;
+  const ymod = await import(`file://${path.join(stage, 'YamlMerger.ts').replace(/\\/g, '/')}`);
+  Merger = ymod.YamlMerger;
 } catch (e) {
   importError = String(e && e.message ? e.message : e);
 }
 
-console.log(`fixture: ${path.basename(fixturePath)} (${rawYaml.length} bytes)`);
+console.log(`fixture: ${noFixture ? '(none)' : path.basename(fixturePath)} `
+  + `(${rawYaml.length} bytes)`);
 console.log(`mihomo baseline: ${expected.length} nodes, ${expectedGroupCount} groups`);
 console.log(`type mix: ${JSON.stringify(countBy(expected, n => n.type))}`);
 if (importError.length > 0) {
   console.log(`\nFAILED to stage/run the real parser: ${importError}`);
   console.log(`\n${passed} passed, ${failed} failed, 0 run`);
   process.exit(1);
+}
+if (noFixture) {
+  await runSyntheticCore(Parser);
+  console.log(`\n${passed} passed, ${failed} failed, ${passed + failed} run (synthetic core only)`);
+  if (failures.length > 0) {
+    console.log('\nfailures:');
+    for (const f of failures) console.log('  - ' + f);
+  }
+  process.exit(failed === 0 ? 0 : 1);
+}
+
+// ── 合成核心用例（无 fixture 时也执行；P0 修复的始终真跑回归） ───────────────
+// 用真解析器（stage 出的 SubscriptionParser/ProxyNode）跑：混合订阅三段共存、
+// ss:// plugin 透传、SIP008 JSON、wireguard:// URI、诊断累加。
+async function runSyntheticCore(Parser) {
+  const mixed = 'vless://00000000-0000-4000-8000-000000000001@example.com:443?type=ws&path=%2Fws#MixNode\n'
+    + 'proxies:\n'
+    + '  - { name: YamlNode, server: yaml.example.com, port: 8443, type: trojan, password: pw1 }\n';
+  const ssPlugin = 'ss://YWVzLTI1Ni1nY206cGFzc3dvcmQx@example.com:8388'
+    + '?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dcdn.example.com#PluginNode\n';
+  const sip008 = '{"version":1,"servers":['
+    + '{"remarks":"Sip008A","server":"a.example.com","server_port":8388,'
+    + '"password":"pw-a","method":"aes-256-gcm"},'
+    + '{"remarks":"Sip008B","server":"b.example.com","server_port":443,'
+    + '"password":"pw-b","method":"chacha20-ietf-poly1305"}]}';
+  const wireguard = 'wireguard://cHJpdmF0ZWtleTIyMjIzMzMzQGV4YW1wbGUuY29t@wg.example.com:51820'
+    + '?public-key=pbl1cBase64Key111111=&address=10.0.0.2%2F32&reserved=0,0,0&mtu=1420#WgNode\n';
+  const garbage = 'vless://bad-uuid@example.com:443#BadNode\n';
+
+  // 1) 混合订阅：明文 URI 段与 YAML 段共存（旧实现三段互斥，YAML 主体丢失）
+  check('混合订阅：明文 URI + YAML 主体都解析出来', () => {
+    const r = Parser.parseDetailed(mixed, 'mix');
+    const names = r.nodes.map(n => n.originalName);
+    ok(names.includes('MixNode'), `MixNode missing: ${JSON.stringify(names)}`);
+    ok(names.includes('YamlNode'), `YamlNode missing: ${JSON.stringify(names)}`);
+    eq(r.nodes.length, 2, 'exactly two nodes');
+  });
+
+  // 2) ss:// plugin 透传（旧实现 query 截断后静默丢失）
+  check('ss:// plugin 参数进 extraOpts（plugin + plugin-opts）', () => {
+    const r = Parser.parseDetailed(ssPlugin, 'ssplug');
+    eq(r.nodes.length, 1, `one node (diag=${JSON.stringify(r.diagnostics)})`);
+    const n = r.nodes[0];
+    // 契约：ss 走结构化槽位（type 枚举 = 'ss'），proxyType 只对现代协议填写
+    eq(n.type, 'ss', 'type ss (enum)');
+    const m = extraOptMap(n);
+    eq(m.get('plugin'), 'obfs-local', 'plugin name');
+    ok(String(m.get('plugin-opts') ?? '').includes('obfs=http'), 'plugin-opts kept');
+    ok(String(m.get('plugin-opts') ?? '').includes('obfs-host=cdn.example.com'), 'obfs-host kept');
+  });
+
+  // 3) SIP008 多用户 JSON（旧实现 0 条目 EMPTY_ENTRIES）
+  check('SIP008 JSON 解析为 ss 节点', () => {
+    const r = Parser.parseDetailed(sip008, 'sip008');
+    eq(r.nodes.length, 2, 'two servers');
+    eq(r.nodes[0].name, 'Sip008A', 'remarks as name');
+    eq(r.nodes[0].server, 'a.example.com', 'server');
+    eq(r.nodes[0].port, 8388, 'server_port');
+    eq(r.nodes[0].method, 'aes-256-gcm', 'method');
+    eq(r.nodes[0].password, 'pw-a', 'password');
+  });
+
+  // 4) wireguard:// URI（旧实现整条 unsupported）
+  check('wireguard:// URI 解析并透传 mihomo 键', () => {
+    const r = Parser.parseDetailed(wireguard, 'wg');
+    eq(r.nodes.length, 1, 'one node');
+    const n = r.nodes[0];
+    eq(n.proxyType, 'wireguard', 'type wireguard');
+    eq(n.server, 'wg.example.com', 'server');
+    eq(n.port, 51820, 'port');
+    const m = extraOptMap(n);
+    ok(String(m.get('private-key') ?? '').length > 0, 'private-key kept');
+    ok(String(m.get('public-key') ?? '').length > 0, 'public-key kept');
+    eq(m.get('reserved'), '[0,0,0]', 'reserved as array form');
+    eq(m.get('mtu'), '1420', 'mtu');
+    eq(m.get('ip'), '10.0.0.2', 'address -> ip (CIDR stripped)');
+  });
+
+  // 5) 诊断累加：混合订阅里无效 URI 计 invalid，不覆盖 YAML 段计数
+  check('诊断累加：混合段 invalid/unsupported 不互相覆盖', () => {
+    const r = Parser.parseDetailed(mixed + garbage, 'mixdiag');
+    ok(r.diagnostics.invalidCount >= 1, `invalid counted: ${JSON.stringify(r.diagnostics)}`);
+    ok(r.nodes.length === 2, 'still two valid nodes');
+  });
+
+  // 6) 生成器消费契约：extraOpts 经 Merger.parseExtraOpts 能解出全部键
+  //    （生成器的 extraOpts 中继段就调它；生成器回写行为由 verify-config-sanitize
+  //    等既有套件覆盖，此处锁"解析产出能被生成器吃进去"这一环）
+  check('解析产出的 extraOpts 是生成器可消费的形状（parseExtraOpts 往返）', () => {
+    const r1 = Parser.parseDetailed(ssPlugin, 'gen1');
+    const pairs1 = Merger.parseExtraOpts(r1.nodes[0].extraOpts);
+    const m1 = new Map(pairs1.map(p => [String(p[0]), String(p[1])]));
+    ok(m1.get('plugin') === 'obfs-local', `plugin via parseExtraOpts: ${JSON.stringify(pairs1)}`);
+    ok(String(m1.get('plugin-opts') ?? '').includes('obfs=http'), 'plugin-opts via parseExtraOpts');
+    const r2 = Parser.parseDetailed(wireguard, 'gen2');
+    const pairs2 = Merger.parseExtraOpts(r2.nodes[0].extraOpts);
+    const m2 = new Map(pairs2.map(p => [String(p[0]), String(p[1])]));
+    ok(String(m2.get('private-key') ?? '').length > 0, 'private-key via parseExtraOpts');
+    ok(String(m2.get('public-key') ?? '').length > 0, 'public-key via parseExtraOpts');
+    ok(m2.get('ip') === '10.0.0.2' && m2.get('reserved') === '[0,0,0]', 'ip/reserved via parseExtraOpts');
+  });
 }
 
 // ── 真跑 ──────────────────────────────────────────────────────────────────

@@ -23,6 +23,8 @@ import {
   repairSteps, HealthStatus, HealthOverall
 } from '../commons/services/LinkHealthChecker';
 import { OrchestratorHealthProbes } from '../commons/services/OrchestratorHealthProbes';
+import { SubscriptionService } from '../commons/services/SubscriptionService';
+import { ImportHistoryEntry } from '../commons/models/Subscription';
 
 @Component
 export struct DiagnosticsSheet {
@@ -45,6 +47,8 @@ export struct DiagnosticsSheet {
   @State reconnectActive: boolean = false;
   @State reconnectConnecting: boolean = false;
   @State reconnectPendingMs: number = 0;
+  // ── 导入历史（最近 N 次导入/刷新摘要，排查"昨天导入少了节点"类问题） ──
+  @State importHistory: ImportHistoryEntry[] = [];
 
   private orchestrator: ConnectionOrchestrator = ConnectionOrchestrator.instance();
   private boundCb: (() => void) | null = null;
@@ -53,6 +57,7 @@ export struct DiagnosticsSheet {
     this.orchestrator.init(getContext(this) as Context);
     this.syncFromOrchestratorReport();
     this.syncRuntimeView();
+    this.syncImportHistory();
     if (this.boundCb === null) {
       // 订阅既有 orchestrator 通知：网络类型/代际、重连退避、自检运行态变化即时刷新
       const cb: () => void = (): void => {
@@ -92,6 +97,26 @@ export struct DiagnosticsSheet {
     this.reconnectActive = r.active;
     this.reconnectConnecting = r.connecting;
     this.reconnectPendingMs = r.pendingDelayMs;
+  }
+
+  /** 读取最近导入/刷新历史（进程级单例，不触发任何 IO） */
+  private syncImportHistory(): void {
+    try {
+      this.importHistory = SubscriptionService.instance().recentImportHistory();
+    } catch (e) {
+      this.importHistory = [];
+    }
+  }
+
+  /** 历史条目的类型标签 */
+  private historyKindLabel(e: ImportHistoryEntry): Resource {
+    if (e.kind === 'local') {
+      return $r('app.string.diagnostics_import_history_kind_local');
+    }
+    if (e.kind === 'direct') {
+      return $r('app.string.diagnostics_import_history_kind_direct');
+    }
+    return $r('app.string.diagnostics_import_history_kind_refresh');
   }
 
   private applyReport(report: LinkHealthReport): void {
@@ -374,6 +399,44 @@ export struct DiagnosticsSheet {
         .scrollBar(BarState.Auto)
       } else {
         Blank().layoutWeight(1)
+      }
+
+      Divider().color(Ui.border)
+
+      // ── 导入记录（最近导入/刷新的摘要；排查"昨天导入少了节点"类问题） ──
+      Text($r('app.string.diagnostics_import_history_title'))
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(Ui.textPrimary)
+      if (this.importHistory.length === 0) {
+        Text($r('app.string.diagnostics_import_history_empty'))
+          .fontSize(11)
+          .fontColor(Ui.textTertiary)
+          .width('100%')
+      } else {
+        Column({ space: 4 }) {
+          ForEach(this.importHistory, (e: ImportHistoryEntry) => {
+            Column({ space: 2 }) {
+              Row({ space: 6 }) {
+                Text(this.historyKindLabel(e))
+                  .fontSize(10)
+                  .fontColor(Ui.textTertiary)
+                  .constraintSize({ minWidth: 28 })
+                Text(e.subName.length > 0 ? e.subName : '-')
+                  .fontSize(12).fontColor(Ui.textPrimary).layoutWeight(1).maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                Text(`${e.addedCount > 0 ? '+' + e.addedCount : '0'}`)
+                  .fontSize(11)
+                  .fontColor(e.addedCount > 0 ? Ui.success : Ui.textTertiary)
+              }.width('100%')
+              Text(e.summary)
+                .fontSize(10).fontColor(Ui.textSecondary).width('100%').maxLines(2)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+            }
+            .width('100%')
+          }, (e: ImportHistoryEntry) => `${e.atMs}-${e.subId}-${e.addedCount}`)
+        }
+        .width('100%')
       }
 
       Divider().color(Ui.border)

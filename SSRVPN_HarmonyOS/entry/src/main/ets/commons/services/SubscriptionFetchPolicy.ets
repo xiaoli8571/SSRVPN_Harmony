@@ -65,9 +65,19 @@ export class SubscriptionFetchResult {
   etag: string = '';
   /**
    * 是否 304 Not Modified —— 服务端确认内容未变（本次没有响应体）。
-   * 调用方据此走「未变更」路径（沿用已落盘节点），而不是把空响应当成失败。
+   * 调用方据此走「未变更」路径（沿用已落盘节点），而不是把空体会当成失败。
    */
   notModified: boolean = false;
+  /**
+   * 面板建议的自动更新间隔（小时，`profile-update-interval` 头）。
+   * 0 = 面板没给。只做解析与落库（展示/调度见 Subscription）。
+   */
+  updateIntervalHours: number = 0;
+  /**
+   * 服务端建议的文件名（`content-disposition` 头，已取 basename 并限长）。
+   * '' = 没给。只做解析与落库。
+   */
+  remoteFileName: string = '';
 }
 
 export enum SubscriptionFetchErrorKind {
@@ -350,6 +360,10 @@ export class SubscriptionFetchPolicy {
         notModified.etag = SubscriptionFetchPolicy.responseEtag(resp.header);
         notModified.userInfo = SubscriptionFetchPolicy.parseUserInfo(
           SubscriptionFetchPolicy.headerValue(resp.header, 'subscription-userinfo'));
+        notModified.updateIntervalHours = SubscriptionFetchPolicy.parseUpdateInterval(
+          SubscriptionFetchPolicy.headerValue(resp.header, 'profile-update-interval'));
+        notModified.remoteFileName = SubscriptionFetchPolicy.parseContentFilename(
+          SubscriptionFetchPolicy.headerValue(resp.header, 'content-disposition'));
         return notModified;
       }
       if (resp.responseCode !== 200) {
@@ -380,12 +394,64 @@ export class SubscriptionFetchPolicy {
       out.userInfo = SubscriptionFetchPolicy.parseUserInfo(
         SubscriptionFetchPolicy.headerValue(resp.header, 'subscription-userinfo'));
       out.etag = SubscriptionFetchPolicy.responseEtag(resp.header);
+      out.updateIntervalHours = SubscriptionFetchPolicy.parseUpdateInterval(
+        SubscriptionFetchPolicy.headerValue(resp.header, 'profile-update-interval'));
+      out.remoteFileName = SubscriptionFetchPolicy.parseContentFilename(
+        SubscriptionFetchPolicy.headerValue(resp.header, 'content-disposition'));
       return out;
     } finally {
       req.destroy();
     }
   }
 
+  /**
+   * `profile-update-interval`：面板建议的自动更新间隔（小时）。
+   * 非法/缺失/超出 1..720 → 0（= 面板没给，不调度）。
+   */
+  static parseUpdateInterval(raw: string): number {
+    const hours = parseInt(raw.trim());
+    if (isNaN(hours) || hours < 1 || hours > 720) {
+      return 0;
+    }
+    return hours;
+  }
+
+  /**
+   * `content-disposition` 取 filename：RFC 5987 `filename*` 优先，
+   * 否则普通 `filename=`；只取 basename（防路径穿越），限长 64。
+   */
+  static parseContentFilename(raw: string): string {
+    if (raw.length === 0) {
+      return '';
+    }
+    let name = '';
+    const star = raw.match(/filename\*\s*=\s*([^;]+)/i);
+    if (star !== null) {
+      const v = star[1].trim();
+      // RFC 5987: charset'lang'value
+      const first = v.indexOf('\'');
+      const second = v.indexOf('\'', first + 1);
+      const encoded = first >= 0 && second > first ? v.substring(second + 1) : v;
+      try {
+        name = decodeURIComponent(encoded.replace(/^"|"$/g, ''));
+      } catch (e) {
+        name = '';
+      }
+    }
+    if (name.length === 0) {
+      const plain = raw.match(/filename\s*=\s*"?([^";]+)"?/i);
+      if (plain !== null) {
+        name = plain[1].trim();
+      }
+    }
+    const slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
+    name = slash >= 0 ? name.substring(slash + 1) : name;
+    name = name.trim();
+    if (name.length === 0 || name === '.' || name === '..' || name.length > 64) {
+      return '';
+    }
+    return name;
+  }
   /**
    * 取响应的 ETag 作为条件请求凭据；服务端只给 Last-Modified 时退而用后者
    * （两者都是合法的 If-None-Match 值来源）。

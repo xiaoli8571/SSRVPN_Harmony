@@ -1523,6 +1523,13 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
    * false，页面按既有约定降级成「端口可达」，绝不冒充代理延迟。
    */
   private testCoreNegativeUntil: number = 0;
+  /**
+   * 运行中测速内核的配置指纹（见 fingerprintLatencyInput）。
+   * 内核配置是启动瞬间的快照 —— 之后订阅增删改、组变化、生效设置变化都不会
+   * 自动进内核。复用分支比对指纹，漂移即重建；否则新节点测出 404 被盖章成
+   * 节点失败（真机：NexPanel 导入后 7 节点全 404）。'' = 未知/已失效。
+   */
+  private testCoreFingerprint: string = '';
 
   /** 懒建状态机（依赖 this.context，调用前须已 init） */
   private getTestCoreFlight(): SingleFlightTestCore {
@@ -1719,6 +1726,63 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
   }
 
   /**
+   * 测速内核配置输入指纹（纯函数，可单测）：
+   * 只含"会导致内核代理表变化"的维度 —— 节点身份与接入点
+   * （subscriptionId|name|server|port|protocol）、订阅 id+enabled、
+   * 组签名、生成器实际消费的设置子集。
+   * 端口分配 / DoH 结果 / hosts 属运行时细节，不致 404，不进指纹。
+   */
+  static fingerprintLatencyInput(subs: SubscriptionService, settings: AppSettings): string {
+    const nodeKeys: string[] = [];
+    for (const n of subs.nodes) {
+      nodeKeys.push(`${n.subscriptionId}\n${n.name}\n${n.server}\n${n.port}\n${n.protocol}`);
+    }
+    nodeKeys.sort();
+    const subKeys: string[] = [];
+    for (const s of subs.subscriptions) {
+      subKeys.push(`${s.id}\n${s.enabled ? '1' : '0'}`);
+    }
+    subKeys.sort();
+    const groupKeys: string[] = [];
+    for (const g of subs.proxyGroups) {
+      const members = g.members.slice().sort().join(',');
+      groupKeys.push(`${g.subscriptionId}\n${g.name}\n${g.groupType}\n${members}\n`
+        + `${g.includeAll ? '1' : '0'}${g.includeAllProxies ? '1' : '0'}\n`
+        + `${g.filterPattern}\n${g.excludeFilterPattern}`);
+    }
+    groupKeys.sort();
+    const settingsKey = JSON.stringify({
+      proxyMode: settings.proxyMode,
+      proxyGroupSelections: settings.proxyGroupSelections,
+      rulesEnabled: settings.rulesEnabled,
+      hyperAdRulesEnabled: settings.hyperAdRulesEnabled,
+      customRules: settings.customRules.slice().sort(),
+      forceDirectSites: settings.forceDirectSites.slice().sort(),
+      forceProxySites: settings.forceProxySites.slice().sort(),
+      useRawProviderConfig: settings.useRawProviderConfig,
+    });
+    const parts: string[] = [
+      `${subs.nodes.length}`,
+      `${subs.subscriptions.length}`,
+      `${subs.proxyGroups.length}`,
+      nodeKeys.join('\n'),
+      subKeys.join('\n'),
+      groupKeys.join('\n'),
+      settingsKey,
+    ];
+    return ConnectionOrchestrator.djb2Hex(parts.join('\n|\n'));
+  }
+
+  /** 小字符串哈希（djb2，hex 输出）：指纹用，不做安全用途。 */
+  private static djb2Hex(s: string): string {
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) {
+      h = (((h << 5) + h) + s.charCodeAt(i)) | 0;
+    }
+    return (h >>> 0).toString(16);
+  }
+
+  /**
    * 确保 headless 测速内核在跑。并发调用共享同一航班：
    * 只有第一次真正走 stop→start，其余复用同一 Promise，
    * 避免「后到的启动把先到的扩展停掉」的互相 stop。
@@ -1734,20 +1798,32 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
       // 旧实现直接 return true，导致整批 /delay 非 200（真机 143 节点全超时）。
       if (await this.verifyTestCoreChannel()) {
         this.testCoreNegativeUntil = 0;
-        return true;
-      }
-      // 通道可能只是被覆盖了 secret：先用本班次 secret 重新下发并复探一次
-      if (this.testCoreSecret.length > 0) {
-        this.api.setEndpoint(this.apiPort, this.testCoreSecret);
-        if (await this.verifyTestCoreChannel()) {
-          AppLogger.info(TAG, 'test core channel recovered by re-issuing endpoint secret');
-          this.testCoreNegativeUntil = 0;
+        // 配置新鲜度：内核配置是启动瞬间的快照，之后订阅增删改不会自动进内核。
+        // 无条件复用会让新节点测出 404 并被盖章成节点失败（真机：NexPanel 导入
+        // 后 7 节点全 404）。指纹漂移 → 停掉重建（headless 启动约 200ms~2s，
+        // 页面本就处在等待通道的状态）；未漂移才复用。
+        const currentFp = ConnectionOrchestrator.fingerprintLatencyInput(subs, settings);
+        if (currentFp !== this.testCoreFingerprint) {
+          AppLogger.warn(TAG,
+            'test core config stale (subscriptions changed after start); tearing down and relaunching');
+          await this.stopTestCore();
+        } else {
           return true;
         }
+      } else {
+        // 通道可能只是被覆盖了 secret：先用本班次 secret 重新下发并复探一次
+        if (this.testCoreSecret.length > 0) {
+          this.api.setEndpoint(this.apiPort, this.testCoreSecret);
+          if (await this.verifyTestCoreChannel()) {
+            AppLogger.info(TAG, 'test core channel recovered by re-issuing endpoint secret');
+            this.testCoreNegativeUntil = 0;
+            return true;
+          }
+        }
+        AppLogger.warn(TAG,
+          'test core marked ACTIVE but controller unusable; tearing down and relaunching');
+        await this.stopTestCore();
       }
-      AppLogger.warn(TAG,
-        'test core marked ACTIVE but controller unusable; tearing down and relaunching');
-      await this.stopTestCore();
     }
     // 安全门禁（防「互相 stop」）：headless 测速内核的启动流程第一步就是
     // stopVpnExtensionAbility —— 若此刻真实隧道正在建立/已连接/恢复中，那一步
@@ -1789,6 +1865,50 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
   /** 本次航班的输入（启动时才读取，避免并发覆盖） */
   private testCoreSubs: SubscriptionService | null = null;
   private testCoreSettings: AppSettings | null = null;
+
+  /**
+   * 引擎 404 自愈用：重建 headless 测速内核（停后起，配置按当前订阅重新生成）。
+   *
+   * 硬门禁：真实隧道权威（连接中/已连接/断开中/恢复中，或 authority 判据为
+   * connected）时一律拒绝 —— stopTestCore 第一步就是停扩展，绝不能在用户
+   * 用 VPN 时执行。被拒/失败时调用方把相关节点保持未测，绝不盖章成失败。
+   *
+   * @returns true=重建后通道可用；false=拒绝或失败
+   */
+  async rebuildTestCoreForLatency(): Promise<boolean> {
+    if (this.context === null) {
+      return false;
+    }
+    if (this.state === ConnState.CONNECTING || this.state === ConnState.CONNECTED
+      || this.state === ConnState.DISCONNECTING || this.state === ConnState.RECOVERING) {
+      AppLogger.info(TAG,
+        'rebuildTestCoreForLatency refused: orchestrator busy (real tunnel authoritative)');
+      return false;
+    }
+    try {
+      const authority = await this.authorityState();
+      if (authority.connected) {
+        AppLogger.info(TAG,
+          `rebuildTestCoreForLatency refused: real tunnel is authoritative (${authority.reason})`);
+        return false;
+      }
+    } catch (e) {
+      AppLogger.warn(TAG,
+        `rebuildTestCoreForLatency authority probe failed: ${AppLogger.errText(e)}`);
+    }
+    const subs: SubscriptionService = this.lastSubs !== null
+      ? this.lastSubs : SubscriptionService.instance();
+    if (subs.nodes.length === 0) {
+      return false;
+    }
+    try {
+      await this.stopTestCore();
+      return await this.ensureTestCore(subs, await this.lastSettingsForLatency());
+    } catch (e) {
+      AppLogger.warn(TAG, `rebuildTestCoreForLatency failed: ${AppLogger.errText(e)}`);
+      return false;
+    }
+  }
 
   /** 内核日志流（/logs WebSocket）：测速诊断用，随 teardown 释放 */
   private coreLogSocket: webSocket.WebSocket | null = null;
@@ -1874,13 +1994,9 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
       this.testCoreSecret = `ssr-test-${Date.now().toString(36)}-${Math.floor(Math.random() * 0x7FFFFFFF).toString(36)}`;
       // 端口探测：其他 mihomo 系应用（NekoBox 等）可能占用默认 9090/7890/1053
       await this.reservePorts();
-      // geoip 缺失时不生成 GEOIP 规则(同 connect), 否则内核启动会联网下载 MMDB 卡死
-      let testGeoip = false;
-      try {
-        testGeoip = fs.statSync(`${this.context.cacheDir}/geoip.metadb`).size > 0;
-      } catch (e) {
-        testGeoip = false;
-      }
+      // geoip 缺失/损坏/下载中时不生成 GEOIP 规则(同 connect, 完整性见 isGeoipReady),
+      // 否则内核启动会联网下载 MMDB 卡死
+      const testGeoip = this.isGeoipReady();
       // 规则集同理：测速核复用同一生成器，缺文件同样会把内核启动卡在联网下载上
       const testRuleProviderReady = this.isRuleProviderReady();
       const yaml = ClashConfigGenerator.generate(subs.nodes[0], subs.nodes, settings,
@@ -1921,6 +2037,10 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
         }
         if (this.readStartOk() && await this.api.healthProbe()) {
           AppLogger.info(TAG, 'headless test core ready');
+          // 配置生效即记录指纹：复用分支靠它判断"启动后订阅是否变过"。
+          // 注意用生成 yaml 时的同一份 subs/settings 输入，避免读写竞态造成误判。
+          this.testCoreFingerprint =
+            ConnectionOrchestrator.fingerprintLatencyInput(subs, settings);
           // 挂载内核日志流: 拨号失败的真实原因(DNS/握手/路由)只在内核日志里,
           // API 的 503 响应体是固定文案。转发进 AppLogger → hilog 可远程排查。
           this.startCoreLogStream(this.testCoreSecret);
@@ -1985,6 +2105,7 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
    */
   resetTestCoreChannelState(): void {
     this.testCoreSecret = '';
+    this.testCoreFingerprint = '';
     this.api.setEndpoint(this.apiPort, '');
     this.testCoreActive = false;
     this.testCoreNegativeUntil = 0;
@@ -2023,6 +2144,7 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
   invalidateTestCoreAfterRealTunnel(): void {
     this.testCoreNegativeUntil = 0;
     this.testCoreSecret = '';
+    this.testCoreFingerprint = '';
     this.testCoreActive = false;
     if (this.testCoreFlight !== null) {
       this.testCoreFlight.resetIdle();
@@ -2275,17 +2397,14 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
       }
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 400));
 
-      // geoip.metadb 缺失时降级生成（不含 GEOIP 规则）, 避免内核在 config.Parse
-      // 阶段联网下载 MMDB 失败导致启动卡死; 连接成功后后台补齐, 下次连接生效。
-      const geoipPath = `${this.context.cacheDir}/geoip.metadb`;
-      let useGeoip = false;
-      try {
-        useGeoip = fs.statSync(geoipPath).size > 0;
-      } catch (e) {
-        useGeoip = false;
-      }
+      // geoip.metadb 缺失/损坏/下载中时降级生成（不含 GEOIP 规则）, 避免内核在
+      // config.Parse 阶段联网下载 MMDB 失败导致启动卡死; 连接成功后后台补齐,
+      // 下次连接生效。完整性见 isGeoipReady()：半截文件曾导致 size>0 误判就绪,
+      // 内核 Parse 时重新联网下载 → 「内核启动超时」。
+      let useGeoip = this.isGeoipReady();
       if (!useGeoip) {
-        AppLogger.info(TAG, 'geoip.metadb missing; generate config without GEOIP rule');
+        AppLogger.info(TAG, 'geoip.metadb not ready (missing/truncated/downloading); '
+          + 'generate config without GEOIP rule');
       }
 
       // hyper-adrules(去广告) 是 type: http 的 rule-provider：本地文件缺失时内核会在
@@ -2594,6 +2713,34 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
     AppLogger.info(TAG, 'disconnected');
   }
 
+  /**
+   * geoip.metadb 就绪判据（连接路径与测速核共用）：
+   *  - size 下限与下载侧一致（>100KB）：TRUNC 写一半的半截文件会被 `size>0`
+   *    误判就绪，内核 Parse 时校验失败重新联网下载 → 「内核启动超时」；
+   *  - 下载进行中一律视为未就绪（原子写前的窗口期同理）；
+   *  - 判定不通过时顺手删除坏文件（避免下次连接再次误判）。
+   */
+  private isGeoipReady(): boolean {
+    if (this.context === null) {
+      return false;
+    }
+    if (this.geoipDownloading) {
+      return false;
+    }
+    try {
+      const p = `${this.context.cacheDir}/geoip.metadb`;
+      if (fs.statSync(p).size > 1024 * 100) {
+        return true;
+      }
+      // 半截/空文件：删掉，等后台补齐
+      fs.unlinkSync(p);
+      AppLogger.warn(TAG, 'geoip.metadb truncated (<100KB); removed, background refetch will rebuild it');
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
   /** 后台下载 geoip.metadb 到内核 home 目录（cacheDir），成功后下次连接启用 GEOIP 直连规则 */
   private geoipDownloading: boolean = false;
 
@@ -2624,12 +2771,24 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
       }).then((resp: http.HttpResponse) => {
         const buf = resp.result as ArrayBuffer;
         if (resp.responseCode === 200 && buf.byteLength > 1024 * 100) {
-          const file = fs.openSync(`${ctx.cacheDir}/geoip.metadb`,
-            fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+          // 原子写：先写 .tmp 再 rename。直接 TRUNC 目标文件时进程被杀/扩展停止
+          // 会留下半截文件，isGeoipReady 的 size 下限是唯一防线，写一半还可能被
+          // 并发的启动读到 → 内核 Parse 重新联网下载 → 「内核启动超时」。
           try {
-            fs.writeSync(file.fd, buf);
-          } finally {
-            fs.closeSync(file);
+            const tmp = `${ctx.cacheDir}/geoip.metadb.tmp`;
+            const file = fs.openSync(tmp,
+              fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+            try {
+              fs.writeSync(file.fd, buf);
+            } finally {
+              fs.closeSync(file);
+            }
+            fs.renameSync(tmp, `${ctx.cacheDir}/geoip.metadb`);
+          } catch (writeError) {
+            AppLogger.warn(TAG, `geoip.metadb write failed: ${AppLogger.errText(writeError)}`);
+            client.destroy();
+            this.geoipDownloading = false;
+            return;
           }
           this.geoipDownloading = false;
           client.destroy();
@@ -2648,14 +2807,26 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
     tryMirror(0);
   }
 
-  /** 去掉广告规则集是否已落盘（内核 home 下的 ./ruleset/hyper_adrules_ads.mrs 非空） */
+  /**
+   * 去广告规则集就绪判据（同 isGeoipReady：完整性下限 + 下载中窗口 + 坏文件清理）。
+   * mrs 二进制最小合法体积按 1KB 兜底（与下载侧一致），TRUNC 半截文件会让
+   * `size>0` 误判就绪，内核拉取 provider 时重新联网 → 启动阻塞。
+   */
   private isRuleProviderReady(): boolean {
     if (this.context === null) {
       return false;
     }
+    if (this.ruleProviderDownloading) {
+      return false;
+    }
     try {
       const p = `${this.context.cacheDir}/${RULESET_SUBDIR}/${HYPER_AD_RULES_FILE}`;
-      return fs.statSync(p).size > 0;
+      if (fs.statSync(p).size > 1024) {
+        return true;
+      }
+      fs.unlinkSync(p);
+      AppLogger.warn(TAG, 'hyper-adrules truncated (<1KB); removed, background refetch will rebuild it');
+      return false;
     } catch (e) {
       return false;
     }
@@ -2687,17 +2858,27 @@ export class ConnectionOrchestrator implements NetworkStateListener, Orchestrato
         const buf = resp.result as ArrayBuffer;
         // mrs 规则集为二进制格式，最小合法体积按 1KB 兜底，防把错误页写进缓存
         if (resp.responseCode === 200 && buf.byteLength > 1024) {
+          // 原子写（同 geoip：TRUNC 半截文件会让就绪检查误判、内核重新联网阻塞启动）
           try {
             ensurePrivateDir(dir);
           } catch (e) {
             AppLogger.warn(TAG, `ruleset dir create failed: ${AppLogger.errText(e)}`);
           }
-          const file = fs.openSync(`${dir}/${HYPER_AD_RULES_FILE}`,
-            fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
           try {
-            fs.writeSync(file.fd, buf);
-          } finally {
-            fs.closeSync(file);
+            const tmp = `${dir}/${HYPER_AD_RULES_FILE}.tmp`;
+            const file = fs.openSync(tmp,
+              fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+            try {
+              fs.writeSync(file.fd, buf);
+            } finally {
+              fs.closeSync(file);
+            }
+            fs.renameSync(tmp, `${dir}/${HYPER_AD_RULES_FILE}`);
+          } catch (writeError) {
+            AppLogger.warn(TAG, `hyper-adrules write failed: ${AppLogger.errText(writeError)}`);
+            client.destroy();
+            this.ruleProviderDownloading = false;
+            return;
           }
           this.ruleProviderDownloading = false;
           client.destroy();

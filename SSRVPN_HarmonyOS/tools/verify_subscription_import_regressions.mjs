@@ -78,10 +78,8 @@ assert.match(parser, /if \(node === null\)[\s\S]*?return;/, '单条坏链接必�
 assert.match(service, /isNodeCountAllowed\(parsed\.length\)/, '刷新必须执行节点上限检查');
 assert.doesNotMatch(service, /body\.includes\('proxies:'\)|trimmed\.includes\('proxies:'\)/,
   '网络订阅和本地导入不得仅靠 proxies: 子串判型');
-assert.match(service, /YamlMerger\.proxyItemGroups\(body\)\.length > 0/,
-  'URL 订阅必须按结构化 YAML 条目判型');
-assert.match(service, /YamlMerger\.proxyItemGroups\(trimmed\)\.length > 0/,
-  '本地 YAML 必须按结构化条目判型');
+assert.match(service, /YamlMerger\.proxyItemGroups\(input\.body\)\.length > 0/,
+  'URL 订阅与本地 YAML 都必须按结构化 YAML 条目判型（三入口共用管线 parseImportBody）');
 assert.match(service, /local import rejected:[\s\S]*?2000 limit/,
   '本地导入必须执行节点上限检查且可诊断');
 assert.match(service, /LIMIT_EXCEEDED/, '超限必须返回显式状态');

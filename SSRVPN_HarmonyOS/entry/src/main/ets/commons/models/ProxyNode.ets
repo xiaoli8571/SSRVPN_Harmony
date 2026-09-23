@@ -79,7 +79,8 @@ export class ProxyNode {
 
   /** 已实现解析器的 URI scheme 注册表（与主流 Clash 客户端同构：认得的 scheme 逐个分发） */
   private static readonly URI_CODECS: Set<string> = new Set<string>([
-    'ssr', 'ss', 'vless', 'vmess', 'trojan', 'hysteria2', 'hy2', 'tuic', 'anytls', 'hysteria'
+    'ssr', 'ss', 'vless', 'vmess', 'trojan', 'hysteria2', 'hy2', 'tuic', 'anytls', 'hysteria',
+    'wireguard'
   ]);
 
   /** scheme 是否有对应解析器（false = 未识别 scheme，由调用方计 unsupported 诊断） */
@@ -124,6 +125,9 @@ export class ProxyNode {
     }
     if (scheme === 'anytls') {
       return ModernUriCodec.parseAnytls(trimmed.substring(9), subscriptionId, id);
+    }
+    if (scheme === 'wireguard') {
+      return ModernUriCodec.parseWireguard(trimmed.substring(13), subscriptionId, id);
     }
     return ModernUriCodec.parseHysteria(trimmed.substring(11), subscriptionId, id);
   }
@@ -233,9 +237,15 @@ export class SsrCodec {
       working = working.substring(0, hashIdx);
     }
     const queryIdx = working.indexOf('?');
+    let queryPart = '';
     if (queryIdx >= 0) {
+      // SIP002 plugin 参数（?plugin=obfs-local;obfs=http;...）必须保留进
+      // extraOpts，否则节点能导入但连不上（且无任何诊断）。outline=1 等无害
+      // 参数忽略。注意先截 query 再走下面两种 userinfo 形态的解析。
+      queryPart = working.substring(queryIdx + 1);
       working = working.substring(0, queryIdx);
     }
+    SsrCodec.applySsPlugin(node, queryPart);
 
     const atIdx = working.lastIndexOf('@');
     if (atIdx >= 0) {
@@ -315,8 +325,41 @@ export class SsrCodec {
   }
 
   static validate(node: ProxyNode): boolean {
+    // NaN 端口天然被拦（NaN > 0 为 false），无需额外分支。
     return node.server.length > 0 && node.port > 0 && node.port < 65536
       && node.method.length > 0 && node.password.length > 0;
+  }
+
+  /**
+   * SIP002 `?plugin=` 参数 → extraOpts 的 plugin / plugin-opts。
+   * 形如 `plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dexample.com`，
+   * 解码后首段是插件名，余下分号段是 plugin-opts。生成器经 extraOpts
+   * 中继原样回写（见 ClashConfigGenerator extraOpts 中继段）。
+   */
+  private static applySsPlugin(node: ProxyNode, queryPart: string): void {
+    if (queryPart.length === 0) {
+      return;
+    }
+    const pluginRaw = ModernUriCodec.parseQuery(queryPart).get('plugin') ?? '';
+    if (pluginRaw.length === 0) {
+      return;
+    }
+    const segments = pluginRaw.split(';');
+    const pluginName = segments[0].trim();
+    // 插件名/参数必须是可见 ASCII：percentDecode 可解出控制字符，生成器遇到
+    // 不安全值会静默跳过该键，节点缺 plugin 会连不上（且无诊断）。这里直接判无效。
+    if (pluginName.length === 0 || !/^[\x20-\x7E]+$/.test(pluginName)) {
+      return;
+    }
+    const pairs: string[][] = [['plugin', pluginName]];
+    const pluginOpts = segments.slice(1).join(';').trim();
+    if (pluginOpts.length > 0) {
+      if (!/^[\x20-\x7E]+$/.test(pluginOpts)) {
+        return;
+      }
+      pairs.push(['plugin-opts', pluginOpts]);
+    }
+    node.extraOpts = ModernUriCodec.buildExtraOpts(pairs);
   }
 }
 
@@ -331,8 +374,8 @@ export class ModernUriCodec {
     return '"' + value.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
   }
 
-  /** 解析查询串为 Map（值做百分号解码） */
-  private static parseQuery(query: string): Map<string, string> {
+  /** 解析查询串为 Map（值做百分号解码）。ss 等协议也需要读 plugin 参数，故公开。 */
+  static parseQuery(query: string): Map<string, string> {
     const out = new Map<string, string>();
     for (const kv of query.split('&')) {
       if (kv.length === 0) {
@@ -728,8 +771,9 @@ export class ModernUriCodec {
     return ModernUriCodec.finish(node);
   }
 
-  /** 协议专用参数 → extraOpts JSON 对（生成配置时原样回写，布尔/数字不引号） */
-  private static buildExtraOpts(pairs: string[][]): string {
+  /** 协议专用参数 → extraOpts JSON 对（生成配置时原样回写，布尔/数字不引号）。
+   * ss 的 plugin 参数也经此进入 extraOpts，故公开。 */
+  static buildExtraOpts(pairs: string[][]): string {
     if (pairs.length === 0) {
       return '';
     }
@@ -934,6 +978,84 @@ export class ModernUriCodec {
         ['disable_mtu_discovery', 'disable-mtu-discovery'])]
     ]);
     node.rawUri = 'hysteria://' + body;
+    node.rawYaml = '';
+    return ModernUriCodec.finish(node);
+  }
+
+  /**
+   * wireguard://privateKey@server:port?publicKey=..&address=..&reserved=..&mtu=..#name
+   * 参数名大小写/连字符宽容（publickey/public-key、presharedkey/pre-shared-key）。
+   * 映射到 mihomo wireguard 出站键，经 extraOpts 中继原样回写。
+   */
+  static parseWireguard(body: string, subscriptionId: string, id: string): ProxyNode | null {
+    const parts = ModernUriCodec.splitUri(body);
+    const query = ModernUriCodec.parseQuery(parts[1]);
+    const name = parts[2];
+    const hostInfo = ModernUriCodec.splitHostPort(parts[0]);
+    if (hostInfo.length < 3) {
+      return null;
+    }
+    const privateKey = SsrCodec.percentDecode(hostInfo[0]);
+    // 私钥必须是 base64 形态；否则要么是残缺链接，要么含控制字符 —— 生成器
+    // 遇到不安全值会静默跳过该键，节点缺 private-key 会让整份配置被内核拒绝，
+    // 必须在解析侧直接判无效。
+    if (privateKey.length === 0 || !/^[A-Za-z0-9+/=_-]+$/.test(privateKey)) {
+      return null;
+    }
+    const host = hostInfo[1];
+    const port = parseInt(hostInfo[2]);
+    const pairs: string[][] = [['private-key', privateKey]];
+    const publicKey = ModernUriCodec.textParam(query, ['public-key', 'publickey', 'publicKey']);
+    if (publicKey.length > 0) {
+      pairs.push(['public-key', publicKey]);
+    }
+    const preShared = ModernUriCodec.textParam(query, ['pre-shared-key', 'presharedkey', 'preSharedKey']);
+    if (preShared.length > 0) {
+      pairs.push(['pre-shared-key', preShared]);
+    }
+    // address: "10.0.0.2/32" 或 "10.0.0.2/32,fd00::1/128" → ip / ipv6（去 CIDR 后缀）
+    const address = ModernUriCodec.textParam(query, ['address']);
+    if (address.length > 0) {
+      for (const item of address.split(',')) {
+        const ip = item.split('/')[0].trim();
+        if (ip.length === 0) {
+          continue;
+        }
+        if (ip.includes(':')) {
+          pairs.push(['ipv6', ip]);
+        } else {
+          pairs.push(['ip', ip]);
+        }
+      }
+    }
+    // reserved: "0,0,0" → [0,0,0]（生成器见 [ 开头原样回写）；其他形态原样透传
+    const reserved = ModernUriCodec.textParam(query, ['reserved']);
+    if (reserved.length > 0) {
+      if (/^\d+(,\d+){0,7}$/.test(reserved)) {
+        pairs.push(['reserved', `[${reserved}]`]);
+      } else {
+        pairs.push(['reserved', reserved]);
+      }
+    }
+    const mtu = ModernUriCodec.numericParam(query, ['mtu']);
+    if (mtu.length > 0) {
+      pairs.push(['mtu', mtu]);
+    }
+    const udp = ModernUriCodec.boolParam(query, ['udp']);
+    if (udp.length > 0) {
+      pairs.push(['udp', udp]);
+    }
+    const node = new ProxyNode();
+    node.id = id;
+    node.subscriptionId = subscriptionId;
+    node.name = name;
+    node.server = host;
+    node.port = port;
+    node.type = ProxyNodeType.UNKNOWN;
+    node.proxyType = 'wireguard';
+    node.udp = true;
+    node.extraOpts = ModernUriCodec.buildExtraOpts(pairs);
+    node.rawUri = 'wireguard://' + body;
     node.rawYaml = '';
     return ModernUriCodec.finish(node);
   }

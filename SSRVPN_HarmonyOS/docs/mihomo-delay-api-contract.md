@@ -65,4 +65,4 @@ GET /group/{urlencoded-name}/delay?url={urlencoded}&timeout={ms}
 1. 现有「为测速拉起第二个无头内核进程（VpnExtensionAbility + mihomo_test_config.yaml）」是**完全不必要的**：组端点已经在内核内并发调度，且真实隧道运行时 controller 就在 9090。
 2. 现有 46 节点批测要经历：生成测速配置 → 停旧扩展 → 600ms 等待 → 启新扩展 → 健康轮询 → 10 lane × /delay → 回收 → 90s 宽限定时器；新方案只需**一个 HTTP 请求**。
 3. 失败语义必须三分：**成功（有数值）/ 失败（组 map 里缺失，或单测 504）/ 未测（批次取消或未覆盖）**。内核 `history.delay==0` 与 map 缺失都属失败，绝不能显示成「0ms 很快」。
-4. 测速 URL 传 `http://cp.cloudflare.com/generate_204` 与 `http://www.gstatic.com/generate_204` 均可用；用 `http://` 而非 `https://` 可省一次 TLS 握手（现有代码用 https，见 ClashApiService 调用点）。
+4. 测速 URL 传 `http://cp.cloudflare.com/generate_204` 与 `http://www.gstatic.com/generate_204` 均可用；用 `http://` 而非 `https://` 可省一次 TLS 握手 —— 客户端默认已对齐为 http（见 `latency-redesign.md` 第七节）。

@@ -13,7 +13,8 @@
  *  2. **禁止 `/group/{name}/delay`**：真机 + mihomo 源码确认它会忽略传入 url、
  *     对非 Selector 组 ForceSet("") 清掉用户固定选择、无并发上限、失败节点静默消失
  *  3. 未连接测速路径不得再直接 `ensureTestCore`（改由 `ensureLatencyApi` 统一决策）
- *  4. 测速 URL 必须是 HTTPS（unified-delay 下 http:// 在劫持型代理里会失败）
+ *  4. 测速 URL 默认必须是 http 的 generate_204（对齐 CFW/CMFA/v2rayN 等主流
+ *     客户端出厂默认；过节点的 TLS 握手挂起会把好节点误判成 504 超时）
  *  5. 并发上限存在且有界（内核侧无上限，客户端必须自律）
  *  6. `timeout` 必须显式传且 ≤ 32767（mihomo 按 16 位解析，超限 400）
  *  7. 整批硬截止后剩余节点保持"未测"，绝不写成超时
@@ -21,6 +22,8 @@
  *  9. 组条目与内建项必须被过滤（PROXY.all 里混着 14 个组）
  * 10. 内核回收必须避开"用户正在用 VPN"的四种状态
  * 11. ClashConfigGenerator 未被本次重做改动（逐字节）
+ * 12. 配置过期自愈：测速内核配置是启动快照，订阅变更后复用必须重建；
+ *     404-on-CORE 先重建重试，重建后还 404 才记失败（NexPanel 导入回归）
  */
 
 const fs = require('fs');
@@ -131,24 +134,34 @@ check('后台静默测速也走同一引擎（不再是第二套实现）', () =
     'background must not keep its own parallel pipeline');
 });
 
-// ── 4. 测速 URL 必须 HTTPS ────────────────────────────────────────────────
-check('默认测速 URL 是 HTTPS 的 generate_204', () => {
-  assert.ok(/LATENCY_TEST_URL\s*=\s*'https:\/\/www\.gstatic\.com\/generate_204'/.test(engine),
-    'primary test url must be https://www.gstatic.com/generate_204');
-  assert.ok(/LATENCY_TEST_URL_ALT\s*=\s*'https:\/\//.test(engine), 'alt test url must be https');
+// ── 4. 测速 URL 对齐主流客户端（http generate_204）─────────────────────────
+check('默认测速 URL 是 http 的 generate_204（对齐 CFW/CMFA/v2rayN）', () => {
+  assert.ok(/LATENCY_TEST_URL\s*=\s*'http:\/\/www\.gstatic\.com\/generate_204'/.test(engine),
+    'primary test url must be http://www.gstatic.com/generate_204');
+  assert.ok(/LATENCY_TEST_URL_ALT\s*=\s*'http:\/\//.test(engine), 'alt test url must be http');
 });
-check('AppSettings 默认测速 URL 也是 HTTPS', () => {
+check('AppSettings 默认测速 URL 是 http，且旧 HTTPS 出厂值会被迁移', () => {
   const settings = fs.readFileSync(rel('entry/src/main/ets/commons/models/AppSettings.ets'), 'utf8');
-  assert.ok(!/testLatencyUrl[^=]*=\s*'http:\/\//.test(settings),
-    'AppSettings default test url must not be plain http');
+  assert.ok(/testLatencyUrl[^=\n]*=\s*'http:\/\/www\.gstatic\.com\/generate_204'/.test(settings),
+    'AppSettings default test url must be http://www.gstatic.com/generate_204');
+  // 存量配置里只有旧出厂值（设置页无编辑入口）→ 必须在 fromJson 迁到新默认，
+  // 否则老用户永远停留在强制 HTTPS 时代，本次对齐对他们不生效。
+  assert.ok(/LEGACY_TEST_LATENCY_URL/.test(settings) && /DEFAULT_TEST_LATENCY_URL/.test(settings),
+    'legacy https default must be migrated to the new http default');
+});
+check('页面不得再强制把 http 测速 URL 改写成 https', () => {
+  assert.ok(!/is not https; falling back/.test(page),
+    'NodeSelectionPage must not override a user http test url back to https');
+  assert.ok(/startsWith\('http:\/\/'\) \|\| configured\.startsWith\('https:\/\/'\)/.test(page),
+    'testUrlForLatency must accept both http and https as configured');
 });
 
 // ── 5. 并发上限 ───────────────────────────────────────────────────────────
-check('并发上限存在且有界（5~16）', () => {
+check('并发上限存在且有界（5~32）', () => {
   const m = engine.match(/LATENCY_CONCURRENCY(?::\s*number)?\s*=\s*(\d+)/);
   assert.ok(m, 'LATENCY_CONCURRENCY must be defined');
   const n = Number(m[1]);
-  assert.ok(n >= 5 && n <= 16, `concurrency ${n} must stay within the ecosystem range 5..16`);
+  assert.ok(n >= 5 && n <= 32, `concurrency ${n} must stay within the bounded range 5..32 (32 caused transport-error storms on device; 24 chosen)`);
 });
 check('并发上限真的用于 lane 数（不会无界 fan-out）', () => {
   assert.ok(/Math\.min\(LATENCY_CONCURRENCY,/.test(engineCode),
@@ -328,9 +341,12 @@ check('引擎在所有退出路径上自己收回 TESTING 标记', () => {
   const run = engineCode.slice(engineCode.indexOf('async run(): Promise<LatencyProgress>'));
   assert.ok(/finally\s*\{\s*this\.clearOwnTestingMarks\(\)/.test(run),
     'cleanup must run in a finally so a throwing worker cannot leak TESTING');
-  // 收尾必须早于 finished=true，否则 isRunning() 提前为假、清理还没做完
-  assert.ok(run.indexOf('clearOwnTestingMarks') < run.indexOf('this.finished = true'),
-    'cleanup must precede finished=true');
+  // 收尾必须早于 finished=true，否则 isRunning() 提前为假、清理还没做完。
+  // 首波与 404 重试波共用 runLanes（各自 finally 收尾），finished=true 在所有波之后。
+  assert.ok(/await this\.runLanes\(generation, deadlineAt\)[\s\S]*?this\.finished = true/.test(run),
+    'all waves (with cleanup) must complete before finished=true');
+  assert.ok(!/this\.finished = true[\s\S]*?await this\.runLanes/.test(run),
+    'no lane may run after finished=true');
 });
 check('清理是幂等的，且页面只作纵深防御（不产生第二套语义）', () => {
   assert.ok(/clearTestingMarks/.test(pageCode), 'page keeps a defensive cleanup');
@@ -376,7 +392,7 @@ check('ClashConfigGenerator 逐字节未变（除 unified-delay 以外本次不�
   assert.strictEqual(hash, expected,
     `ClashConfigGenerator changed (${hash} != ${expected}); if intentional, update latency-gen-fingerprint.json`);
 });
-check('生成器仍启用 unified-delay（测速 URL 必须 HTTPS 的原因）', () => {
+check('生成器仍启用 unified-delay（第二次 HEAD 只计热 RTT，测速更准）', () => {
   const gen = fs.readFileSync(rel(svc + 'ClashConfigGenerator.ets'), 'utf8');
   assert.ok(/unified-delay: true/.test(gen), 'unified-delay must stay enabled');
 });
@@ -389,6 +405,48 @@ check('存在设备实测的 delay API 契约文档', () => {
 check('存在延迟测试重做设计文档', () => {
   assert.ok(fs.existsSync(rel('docs/latency-redesign.md')),
     'docs/latency-redesign.md must exist');
+});
+
+// ── 13. 配置过期自愈（NexPanel 导入后 7 节点全 404 的回归）────────────────
+check('配置指纹函数存在且覆盖身份维度（节点/订阅/组/生效设置）', () => {
+  assert.ok(/static fingerprintLatencyInput\(subs: SubscriptionService, settings: AppSettings\)/.test(orch),
+    'fingerprintLatencyInput(subs, settings) must exist');
+  for (const t of ['n.subscriptionId', 'n.name', 'n.server', 'n.port', 'n.protocol',
+    's.id', 's.enabled', 'g.members', 'proxyMode', 'proxyGroupSelections',
+    'rulesEnabled', 'customRules', 'forceDirectSites', 'forceProxySites',
+    'useRawProviderConfig', 'djb2']) {
+    assert.ok(orch.includes(t), `fingerprint must cover ${t}`);
+  }
+  // 指纹行为（纯度/漂移口径）由 verify-latency-engine-runtime.mjs 从真实源码
+  // 抽取函数后真跑，本套件只锁接线。
+});
+check('复用分支比对指纹：漂移则停后重建，不漂移才复用', () => {
+  assert.ok(/const currentFp = ConnectionOrchestrator\.fingerprintLatencyInput\(subs, settings\)/.test(orchCode),
+    'reuse path must compute the current fingerprint from live inputs');
+  assert.ok(/currentFp !== this\.testCoreFingerprint/.test(orchCode),
+    'reuse path must compare fingerprints');
+  assert.ok(/test core config stale/.test(orch), 'stale config must be logged');
+  assert.ok(/this\.testCoreFingerprint =\s*ConnectionOrchestrator\.fingerprintLatencyInput\(subs, settings\)/.test(orch),
+    'launch success must record the new fingerprint');
+});
+check('rebuildTestCoreForLatency 存在且绝不动真实隧道', () => {
+  assert.ok(/async rebuildTestCoreForLatency\(\): Promise<boolean>/.test(orch),
+    'rebuildTestCoreForLatency must exist');
+  assert.ok(/rebuildTestCoreForLatency refused: orchestrator busy/.test(orchCode),
+    'rebuild must refuse when orchestrator is busy');
+  assert.ok(/rebuildTestCoreForLatency refused: real tunnel is authoritative/.test(orchCode),
+    'rebuild must refuse when authority says connected');
+});
+check('引擎 404-on-CORE 先重试后定论（单次重建+重试波）', () => {
+  assert.ok(/staleQueue/.test(engine) && /staleRetryDone/.test(engine),
+    'engine must queue 404-on-CORE for retry');
+  assert.ok(/rebuildTestCoreForLatency\(\)/.test(engineCode),
+    'engine must trigger one rebuild');
+  assert.ok(/重建后还 404 才是真删除/.test(engine),
+    'second-strike 404 must fall through to FAILED');
+  assert.ok(/stale404/.test(engine), 'progress must expose stale404 counter');
+  // 重试真行为（重建一次/进度不重复计/保持未测/二次 404 定论）由
+  // verify-latency-engine-runtime.mjs 真跑，本套件只锁接线。
 });
 
 console.log(`\n${passed}/${passed + failures.length} passed, ${failures.length} failed`);

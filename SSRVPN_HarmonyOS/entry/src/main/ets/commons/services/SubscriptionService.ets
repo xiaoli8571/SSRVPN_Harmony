@@ -19,7 +19,8 @@ import { preferences } from '@kit.ArkData';
 import { asset } from '@kit.AssetStoreKit';
 import { util } from '@kit.ArkTS';
 import {
-  Subscription, SubscriptionImportDiagnostics, SubscriptionRefreshResult, SubscriptionRefreshStatus
+  Subscription, SubscriptionImportDiagnostics, SubscriptionRefreshResult, SubscriptionRefreshStatus,
+  ImportHistoryEntry, ImportHistoryJson
 } from '../models/Subscription';
 import { ProxyNode, ProxyNodeType, SsrCodec } from '../models/ProxyNode';
 import { ProxyGroup, ProxyGroupJson } from '../models/ProxyGroup';
@@ -50,6 +51,9 @@ const KEY_SUBS = 'subscriptions_json';
 const KEY_NODES = 'nodes_json';
 const KEY_HIDDEN = 'hidden_nodes_json';
 const KEY_GROUPS = 'proxy_groups_json';
+const KEY_IMPORT_HISTORY = 'import_history_json';
+/** 导入历史保留条数 */
+const IMPORT_HISTORY_LIMIT = 10;
 const KEY_ALIAS_CACHE = 'sealed_alias_cache_json';
 export const DIRECT_GROUP_ID = 'direct';
 const DIRECT_GROUP_NAME = '单节点';
@@ -109,6 +113,46 @@ function nodeUriKey(nodeId: string): string {
   return `rawuri|${nodeId}`;
 }
 
+/** 三入口共用导入管线的解析输入（各入口的差异参数；其余逻辑完全一致） */
+interface ImportParseInput {
+  body: string;
+  subId: string;
+  subName: string;
+  /** merge() 的 prev 参数（URL 用 yaml_cache；本地用 ''） */
+  prevYaml: string;
+  /** provider 拉取凭据（本地用 ''） */
+  headerName: string;
+  headerValue: string;
+  /** 是否回写 yaml_cache（URL + 本地新增；本地刷新不写，避免缓存覆盖原文） */
+  writeYamlCache: boolean;
+  /** 日志前缀 */
+  logTag: string;
+}
+
+/** 三入口共用导入管线的解析输出 */
+interface ImportParseOutput {
+  parsed: ProxyNode[];
+  parsedGroups: ProxyGroup[];
+  structuredYaml: boolean;
+  providerEntriesCount: number;
+  providerImported: number;
+}
+
+/** 三入口共用导入管线的落库输入 */
+interface ImportCommitInput {
+  subId: string;
+  /** false = 组为空时保留旧组（本地刷新走 yaml_cache 退路，无组信息） */
+  replaceGroupsEvenIfEmpty: boolean;
+  /** true = 新订阅追加（addLocal），false = 同订阅替换 */
+  isNewSub: boolean;
+}
+
+/** 三入口共用导入管线的落库结果（提示文案由各入口按自己的结果形态组装） */
+interface ImportCommitResult {
+  code: string;
+  nodes: ProxyNode[];
+}
+
 export class SubscriptionService {
   /**
    * 进程级单例（先例：ConnectionOrchestrator.instance()）。
@@ -152,6 +196,17 @@ export class SubscriptionService {
   credentialMissingCount: number = 0;
   /** 最近一次导入（刷新/本地 YAML/直链）的诊断, 供页面直接展示 */
   lastImportDiagnostics: SubscriptionImportDiagnostics = new SubscriptionImportDiagnostics();
+  /**
+   * 节点页自动补测的进程级状态（页面实例销毁重建不影响）：
+   *  - autoTestColdDone：进程启动后是否已跑过一次（软件完全退出重进 = 新进程 = 重置）
+   *  - mutateEpoch / autoTestConsumedEpoch：订阅导入/删除/刷新成功时 mutateEpoch+1；
+   *    页面消费后对齐 —— 高于已消费值 = 有新导入需要补测
+   */
+  autoTestColdDone: boolean = false;
+  mutateEpoch: number = 0;
+  autoTestConsumedEpoch: number = 0;
+  /** 最近导入/刷新历史（内存 + Preferences 持久化，上限 10，诊断面板可查） */
+  private importHistory: ImportHistoryEntry[] = [];
   /** 最近一次节点恢复（nodes_json → 内存）被丢弃的记录数与原因 */
   lastRestoreInvalidCount: number = 0;
   lastRestoreInvalidReasons: string = '';
@@ -247,6 +302,23 @@ export class SubscriptionService {
       this.proxyGroups = SubscriptionService.mapGroups(JSON.parse(groupsRaw) as Object);
     } catch (e) {
       AppLogger.warn(TAG, 'invalid proxy groups preferences ignored');
+    }
+
+    try {
+      const historyRaw = await this.store.get(KEY_IMPORT_HISTORY, '[]') as string;
+      const arr = JSON.parse(historyRaw) as Object[];
+      if (Array.isArray(arr)) {
+        const loaded: ImportHistoryEntry[] = [];
+        for (const item of arr) {
+          if (loaded.length >= IMPORT_HISTORY_LIMIT) {
+            break;
+          }
+          loaded.push(ImportHistoryEntry.fromJson(item as ImportHistoryJson));
+        }
+        this.importHistory = loaded;
+      }
+    } catch (e) {
+      AppLogger.warn(TAG, 'invalid import history preferences ignored');
     }
 
     // 1) 一次性凭据迁移（必须在任何 persist 之前，避免明文被再次写回）
@@ -1450,6 +1522,50 @@ export class SubscriptionService {
   }
 
   /**
+   * 记录一次导入/刷新历史（诊断面板可查）。
+   * 只记摘要文本，不记订阅原文与凭据；持久化失败只打日志，绝不影响导入结果。
+   * 由三个入口的外层 wrapper 在 finally 里调用，保证所有退出路径都被记录。
+   */
+  private recordImportHistory(kind: string, subName: string, subId: string,
+    diagnostics: SubscriptionImportDiagnostics): void {
+    try {
+      const entry = new ImportHistoryEntry();
+      entry.atMs = Date.now();
+      entry.kind = kind;
+      entry.subName = subName;
+      entry.subId = subId;
+      entry.summary = diagnostics.summary();
+      entry.addedCount = diagnostics.addedCount;
+      this.importHistory.unshift(entry);
+      if (this.importHistory.length > IMPORT_HISTORY_LIMIT) {
+        this.importHistory.length = IMPORT_HISTORY_LIMIT;
+      }
+      this.persistImportHistory().catch((e: Object): void => {
+        AppLogger.warn(TAG, `import history persist failed: ${AppLogger.errText(e)}`);
+      });
+    } catch (e) {
+      AppLogger.warn(TAG, `import history record failed: ${AppLogger.errText(e)}`);
+    }
+  }
+
+  /** 最近导入/刷新历史（内存快照，诊断面板展示用；未初始化时为空） */
+  recentImportHistory(): ImportHistoryEntry[] {
+    return this.importHistory.slice();
+  }
+
+  private async persistImportHistory(): Promise<void> {
+    if (this.store === null) {
+      return;
+    }
+    const arr: ImportHistoryJson[] = [];
+    for (const e of this.importHistory) {
+      arr.push(e.toJson());
+    }
+    await this.store.put(KEY_IMPORT_HISTORY, JSON.stringify(arr));
+    await this.store.flush();
+  }
+
+  /**
    * 敏感凭据落盘（透明写入路径）：节点凭据写 AssetStore；
    * 订阅 headerValue 同样入加密层，另存一次性绑定 rawUri 以便 Asset 缺失时回退。
    * Asset 不可用时绝不写明文，仅记录告警（元数据仍可正常持久化）。
@@ -1539,6 +1655,7 @@ export class SubscriptionService {
     this.proxyGroups = this.proxyGroups.filter((g) => g.subscriptionId !== id);
     // 「不再需要即删干净」：删订阅即删其 provider 落盘原文与登记项
     RawSubscriptionStore.remove(id);
+    this.mutateEpoch = this.mutateEpoch + 1;
     await this.persist();
   }
 
@@ -1670,6 +1787,92 @@ export class SubscriptionService {
       result.status === SubscriptionRefreshStatus.RATE_LIMITED, result.advice);
   }
 
+  /**
+   * 三入口共用：内容 → 节点/组/诊断（解析 + provider 拉取 + 输入口径）。
+   * YamlMergeError 原样抛出，由各入口按自己的结果形态处理（超限提示不同）。
+   */
+  private async parseImportBody(input: ImportParseInput,
+    diagnostics: SubscriptionImportDiagnostics): Promise<ImportParseOutput> {
+    YamlMerger.resetSkipStats();
+    let parsed: ProxyNode[];
+    let parsedGroups: ProxyGroup[] = [];
+    const structuredYaml = YamlMerger.proxyItemGroups(input.body).length > 0;
+    if (structuredYaml) {
+      const merged: MergedProxy[] = YamlMerger.merge([input.body], input.subName, input.prevYaml);
+      SubscriptionService.absorbYamlMergeStats(diagnostics);
+      parsed = SubscriptionService.mergedToNodes(merged, input.subId, diagnostics);
+      parsedGroups = SubscriptionParser.parseProxyGroups(input.body, input.subId);
+      diagnostics.inputCount = diagnostics.inputCount + parsed.length + diagnostics.invalidCount
+        + diagnostics.unsupportedCount;
+      if (input.writeYamlCache && this.store !== null) {
+        await this.store.put(`yaml_cache_${input.subId}`, YamlMerger.toYaml(merged));
+      }
+    } else {
+      const parseResult = SubscriptionParser.parseDetailed(input.body, input.subId);
+      parsed = parseResult.nodes;
+      parsedGroups = parseResult.groups;
+      diagnostics.inputCount = diagnostics.inputCount + parseResult.diagnostics.inputCount;
+      diagnostics.duplicateCount = diagnostics.duplicateCount + parseResult.diagnostics.duplicateCount;
+      if (parseResult.diagnostics.invalidCount > 0) {
+        SubscriptionService.noteInvalidBulk(diagnostics, parseResult.diagnostics.invalidCount,
+          `无效链接 ${parseResult.diagnostics.invalidCount} 条`);
+      }
+      diagnostics.unsupportedCount = diagnostics.unsupportedCount + parseResult.diagnostics.unsupportedCount;
+      diagnostics.unsupportedTypes = SubscriptionService.mergeTypes(diagnostics.unsupportedTypes,
+        parseResult.diagnostics.unsupportedTypes);
+    }
+    if (YamlMerger.lastSkippedCount > 0) {
+      AppLogger.warn(TAG, `${input.logTag} skipped ${YamlMerger.lastSkippedCount} node(s) `
+        + `of unsupported type(s): ${YamlMerger.lastSkippedTypes}`);
+    }
+    // ---- proxy-providers：节点放在 provider 段而 proxies 为空的配置也必须导入 ----
+    const providerEntries = ProxyProviderParser.parse(input.body);
+    let providerImported = 0;
+    if (providerEntries.length > 0) {
+      providerImported = await this.appendProviderNodes(providerEntries, input.subId,
+        input.headerName, input.headerValue, parsed, diagnostics);
+      AppLogger.info(TAG, `${input.logTag} imported ${providerImported} provider node(s) `
+        + `from ${providerEntries.length} provider declaration(s)`);
+    }
+    return {
+      parsed: parsed, parsedGroups: parsedGroups, structuredYaml: structuredYaml,
+      providerEntriesCount: providerEntries.length, providerImported: providerImported,
+    };
+  }
+
+  /**
+   * 三入口共用：空/超限守卫 → 隐藏过滤 → 分组物化 → 落库替换/追加。
+   * 只做判定与落库，不组装面向用户的提示（各入口结果形态不同：fail result / 0）。
+   */
+  private commitImportNodes(parsed: ProxyNode[], parsedGroups: ProxyGroup[],
+    input: ImportCommitInput,
+    diagnostics: SubscriptionImportDiagnostics): ImportCommitResult {
+    if (parsed.length === 0) {
+      return { code: 'empty', nodes: [] };
+    }
+    if (!SubscriptionFetchPolicy.isNodeCountAllowed(parsed.length)) {
+      diagnostics.limitCount = diagnostics.limitCount + 1;
+      SubscriptionService.appendInvalidReason(diagnostics, `节点数量 ${parsed.length} 超过 2000 上限`);
+      return { code: 'limit', nodes: [] };
+    }
+    let visible = parsed;
+    if (this.hiddenNodes.length > 0) {
+      visible = parsed.filter((n) => !this.hiddenNodes.includes(SubscriptionService.nodeKey(n)));
+      diagnostics.hiddenCount = parsed.length - visible.length;
+    }
+    SubscriptionParser.materializeDynamicGroups(parsedGroups, visible);
+    if (parsedGroups.length > 0 || input.replaceGroupsEvenIfEmpty) {
+      this.proxyGroups = this.proxyGroups.filter((g) => g.subscriptionId !== input.subId).concat(parsedGroups);
+    }
+    if (input.isNewSub) {
+      this.nodes = this.nodes.concat(visible);
+    } else {
+      this.nodes = this.nodes.filter((n) => n.subscriptionId !== input.subId).concat(visible);
+    }
+    this.ensureUniqueNames();
+    return { code: 'ok', nodes: visible };
+  }
+
   async refreshSubscription(id: string): Promise<SubscriptionRefreshResult> {
     const sub = this.subscriptions.find((s) => s.id === id);
     if (sub === undefined) {
@@ -1678,6 +1881,19 @@ export class SubscriptionService {
     // 三入口统一诊断：本次刷新的所有计数（输入/成功/重复/无效/不支持/超限/持久化失败/配置丢弃）
     const diagnostics = new SubscriptionImportDiagnostics();
     this.lastImportDiagnostics = diagnostics;
+    try {
+      return await this.refreshSubscriptionInner(id, sub, diagnostics);
+    } finally {
+      this.recordImportHistory('refresh', sub.name, sub.id, diagnostics);
+      if (diagnostics.addedCount > 0) {
+        this.mutateEpoch = this.mutateEpoch + 1;
+      }
+    }
+  }
+
+  /** refreshSubscription 内层（管线本体；外层只负责诊断装配与历史记录） */
+  private async refreshSubscriptionInner(id: string, sub: Subscription,
+    diagnostics: SubscriptionImportDiagnostics): Promise<SubscriptionRefreshResult> {
     // 本地 YAML 导入的伪订阅: 刷新 = 从落盘原文重解析 + 重拉 providers（provider
     // 内容可能已更新，或上次导入时拉取失败——刷新就是重试入口），不是空转报成功。
     if (sub.url.startsWith('local://')) {
@@ -1701,6 +1917,12 @@ export class SubscriptionService {
         if (fetched.etag.length > 0) {
           sub.etag = fetched.etag;
         }
+        if (fetched.updateIntervalHours > 0) {
+          sub.updateIntervalHours = fetched.updateIntervalHours;
+        }
+        if (fetched.remoteFileName.length > 0) {
+          sub.remoteFileName = fetched.remoteFileName;
+        }
         sub.lastRefreshResult = SubscriptionRefreshStatus.NOT_MODIFIED;
         try {
           await this.persist();
@@ -1720,6 +1942,13 @@ export class SubscriptionService {
       sub.downloadBytes = fetched.userInfo.downloadBytes;
       sub.totalBytes = fetched.userInfo.totalBytes;
       sub.expireAt = fetched.userInfo.expireAt;
+      // 面板建议的更新间隔与文件名：有才覆盖（面板撤掉头时保留旧值，不静默清零）
+      if (fetched.updateIntervalHours > 0) {
+        sub.updateIntervalHours = fetched.updateIntervalHours;
+      }
+      if (fetched.remoteFileName.length > 0) {
+        sub.remoteFileName = fetched.remoteFileName;
+      }
 
       // 自动命名：订阅仍是默认名（"订阅 N"）时，从内容中提取机场名
       if (SubscriptionService.isDefaultName(sub.name)) {
@@ -1730,116 +1959,51 @@ export class SubscriptionService {
         }
       }
 
-      let parsed: ProxyNode[];
-      let parsedGroups: ProxyGroup[] = [];
-      YamlMerger.resetSkipStats();
-      const structuredYaml = YamlMerger.proxyItemGroups(body).length > 0;
-      if (structuredYaml) {
-        // Clash YAML 订阅：走合并引擎（跨刷新保留节点名称，限额与去重对齐 upstream）
-        const prev = this.store !== null ? await this.store.get(`yaml_cache_${id}`, '') as string : '';
-        let merged: MergedProxy[] = [];
-        try {
-          merged = YamlMerger.merge([body], sub.name, prev);
-        } catch (mergeError) {
-          if (mergeError instanceof YamlMergeError) {
-            // 合并引擎限额（10k 节点 / 1000 来源 / 字段长度 / 单条大小）属「超限」，
-            // 不能笼统报成解析失败：用户看到的应是「超限」而不是「内容坏了」。
-            diagnostics.limitCount = diagnostics.limitCount + 1;
-            SubscriptionService.appendInvalidReason(diagnostics, `合并超限：${mergeError.message}`);
-            sub.lastRefreshResult = SubscriptionRefreshStatus.LIMIT_EXCEEDED;
-            try {
-              await this.persist();
-            } catch (persistError) {
-              return SubscriptionRefreshResult.fail(SubscriptionRefreshStatus.PERSIST_ERROR,
-                `节点超限状态保存失败：${SubscriptionService.describeError(persistError)}`, diagnostics);
-            }
-            return SubscriptionRefreshResult.fail(SubscriptionRefreshStatus.LIMIT_EXCEEDED,
-              `订阅内容超出合并限额：${mergeError.message}`, diagnostics);
-          }
-          throw mergeError as Error;
-        }
-        // 合并阶段被跳过的节点（不支持的协议类型）与逐条失败的原因并入同一次诊断
-        SubscriptionService.absorbYamlMergeStats(diagnostics);
-        parsed = SubscriptionService.mergedToNodes(merged, sub.id, diagnostics);
-        parsedGroups = SubscriptionParser.parseProxyGroups(body, sub.id);
-        diagnostics.inputCount = diagnostics.inputCount + parsed.length + diagnostics.invalidCount
-          + diagnostics.unsupportedCount;
-        if (this.store !== null) {
-          // 缓存只保存白名单结构化节点的安全 YAML，禁止缓存或回放订阅原文。
-          await this.store.put(`yaml_cache_${id}`, YamlMerger.toYaml(merged));
-        }
-      } else {
-        const parseResult = SubscriptionParser.parseDetailed(body, sub.id);
-        parsed = parseResult.nodes;
-        parsedGroups = parseResult.groups;
-        diagnostics.inputCount = diagnostics.inputCount + parseResult.diagnostics.inputCount;
-        diagnostics.duplicateCount = diagnostics.duplicateCount + parseResult.diagnostics.duplicateCount;
-        if (parseResult.diagnostics.invalidCount > 0) {
-          SubscriptionService.noteInvalidBulk(diagnostics, parseResult.diagnostics.invalidCount,
-            `无效链接 ${parseResult.diagnostics.invalidCount} 条`);
-        }
-        diagnostics.unsupportedCount = diagnostics.unsupportedCount + parseResult.diagnostics.unsupportedCount;
-        diagnostics.unsupportedTypes = SubscriptionService.mergeTypes(diagnostics.unsupportedTypes,
-          parseResult.diagnostics.unsupportedTypes);
-      }
-      if (YamlMerger.lastSkippedCount > 0) {
-        // 不再静默丢弃: 记录被跳过的节点数与协议类型, 供诊断与界面提示
-        AppLogger.warn(TAG, `subscription ${id} skipped ${YamlMerger.lastSkippedCount} node(s) `
-          + `of unsupported type(s): ${YamlMerger.lastSkippedTypes}`);
-      }
-
-      // ---- proxy-providers：节点放在 provider 段而 proxies 为空的配置也必须导入 ----
-      const providerEntries = ProxyProviderParser.parse(body);
-      let providerImported = 0;
-      if (providerEntries.length > 0) {
-        const fetchable = ProxyProviderParser.fetchable(providerEntries);
-        diagnostics.providerSkippedCount = providerEntries.length - fetchable.length;
-        diagnostics.providerTypes = ProxyProviderParser.unsupportedTypes(providerEntries);
-        if (diagnostics.providerSkippedCount > 0) {
-          AppLogger.warn(TAG, `subscription ${id} has ${diagnostics.providerSkippedCount} proxy-provider(s) `
-            + `of unsupported type(s): ${diagnostics.providerTypes}`);
-        }
-        const missingUrl = ProxyProviderParser.missingUrl(providerEntries);
-        if (missingUrl > 0) {
-          diagnostics.providerFailedCount = diagnostics.providerFailedCount + missingUrl;
-          SubscriptionService.appendProviderFailure(diagnostics, `provider 缺少 url ${missingUrl} 个`);
-        }
-        for (let pi = 0; pi < fetchable.length; pi++) {
-          const entry = fetchable[pi];
+      // Clash YAML 订阅：走合并引擎（跨刷新保留节点名称，限额与去重对齐 upstream）。
+      // 解析走三入口共用管线（parseImportBody），超限语义保持本入口原样。
+      const prev = this.store !== null ? await this.store.get(`yaml_cache_${id}`, '') as string : '';
+      let out: ImportParseOutput;
+      try {
+        out = await this.parseImportBody({
+          body: body, subId: id, subName: sub.name, prevYaml: prev,
+          headerName: sub.headerName, headerValue: sub.headerValue,
+          writeYamlCache: true, logTag: `subscription ${id}`,
+        }, diagnostics);
+      } catch (mergeError) {
+        if (mergeError instanceof YamlMergeError) {
+          // 合并引擎限额（10k 节点 / 1000 来源 / 字段长度 / 单条大小）属「超限」，
+          // 不能笼统报成解析失败：用户看到的应是「超限」而不是「内容坏了」。
+          diagnostics.limitCount = diagnostics.limitCount + 1;
+          SubscriptionService.appendInvalidReason(diagnostics, `合并超限：${mergeError.message}`);
+          sub.lastRefreshResult = SubscriptionRefreshStatus.LIMIT_EXCEEDED;
           try {
-            // 与主订阅完全相同的 UA 降级链 / 重定向校验 / 大小上限
-            const providerFetched = await SubscriptionFetchPolicy.fetch(
-              entry.url, sub.headerName, sub.headerValue);
-            const providerNodes = SubscriptionService.parseProviderBody(providerFetched.body, sub.id,
-              entry.name, diagnostics);
-            // 节点来源标注为 provider（id 前缀 -p 与主订阅条目区分，避免 id 冲突）
-            for (let ni = 0; ni < providerNodes.length; ni++) {
-              providerNodes[ni].id = `${sub.id}-p${pi}-${ni}`;
-            }
-            if (providerNodes.length > 0) {
-              parsed = parsed.concat(providerNodes);
-              providerImported = providerImported + providerNodes.length;
-            }
-          } catch (providerError) {
-            diagnostics.providerFailedCount = diagnostics.providerFailedCount + 1;
-            SubscriptionService.appendProviderFailure(diagnostics,
-              `${entry.name.length > 0 ? entry.name : 'provider'}: `
-              + `${SubscriptionService.describeError(providerError)}`);
-            AppLogger.warn(TAG, `proxy-provider fetch/parse failed: `
-              + `${SubscriptionService.describeError(providerError)}`);
+            await this.persist();
+          } catch (persistError) {
+            return SubscriptionRefreshResult.fail(SubscriptionRefreshStatus.PERSIST_ERROR,
+              `节点超限状态保存失败：${SubscriptionService.describeError(persistError)}`, diagnostics);
           }
+          return SubscriptionRefreshResult.fail(SubscriptionRefreshStatus.LIMIT_EXCEEDED,
+            `订阅内容超出合并限额：${mergeError.message}`, diagnostics);
         }
-        diagnostics.providerCount = providerImported;
-        diagnostics.inputCount = diagnostics.inputCount + providerImported;
+        throw mergeError as Error;
       }
+      const parsedGroups = out.parsedGroups;
+      const structuredYaml = out.structuredYaml;
+      const providerEntriesCount = out.providerEntriesCount;
+      const providerImported = out.providerImported;
 
-      if (parsed.length === 0) {
+      // ---- proxy-providers 由共用管线 parseImportBody 处理（见上） ----
+
+      // 空/超限守卫与落库走共用管线（计数只在 commit 内做一次，避免重复累加）
+      const commit = this.commitImportNodes(out.parsed, parsedGroups,
+        { subId: id, replaceGroupsEvenIfEmpty: true, isNewSub: false }, diagnostics);
+      if (commit.code === 'empty') {
         // HTTP 200 但 0 条目：与「响应为空」「内容无法识别」区分，且给出 provider 专用提示
         sub.lastRefreshResult = SubscriptionRefreshStatus.EMPTY_ENTRIES;
         let message = '内容未解析出节点（支持 ss/ssr/vless/vmess/trojan/hysteria2/tuic/hysteria '
           + '与 Clash YAML）';
-        if (providerEntries.length > 0 && !structuredYaml) {
-          message = providerImported > 0
+        if (providerEntriesCount > 0 && !structuredYaml) {
+          message = out.providerImported > 0
             ? '配置未包含 proxies 节点，节点来自 proxy-providers'
             : '配置只有 proxy-providers 段且未导入任何节点（请检查 provider 类型 http/https 与链接可用性）';
         }
@@ -1851,10 +2015,8 @@ export class SubscriptionService {
         }
         return SubscriptionRefreshResult.fail(SubscriptionRefreshStatus.EMPTY_ENTRIES, message, diagnostics);
       }
-      if (!SubscriptionFetchPolicy.isNodeCountAllowed(parsed.length)) {
+      if (commit.code === 'limit') {
         sub.lastRefreshResult = SubscriptionRefreshStatus.LIMIT_EXCEEDED;
-        diagnostics.limitCount = diagnostics.limitCount + 1;
-        SubscriptionService.appendInvalidReason(diagnostics, `节点数量 ${parsed.length} 超过 2000 上限`);
         try {
           await this.persist();
         } catch (persistError) {
@@ -1862,19 +2024,9 @@ export class SubscriptionService {
             `节点超限状态保存失败：${SubscriptionService.describeError(persistError)}`, diagnostics);
         }
         return SubscriptionRefreshResult.fail(SubscriptionRefreshStatus.LIMIT_EXCEEDED,
-          `节点数量 ${parsed.length} 超过 2000 个上限，未写入任何节点`, diagnostics);
+          `节点数量 ${out.parsed.length} 超过 2000 个上限，未写入任何节点`, diagnostics);
       }
-      // 用户手动删除过的节点: 刷新后不再复活
-      if (this.hiddenNodes.length > 0) {
-        const visible = parsed.filter((n) => !this.hiddenNodes.includes(SubscriptionService.nodeKey(n)));
-        diagnostics.hiddenCount = parsed.length - visible.length;
-        parsed = visible;
-      }
-      // 动态分组物化（include-all/filter/exclude-filter → members），再整体替换该订阅的组
-      SubscriptionParser.materializeDynamicGroups(parsedGroups, parsed);
-      this.proxyGroups = this.proxyGroups.filter((g) => g.subscriptionId !== id).concat(parsedGroups);
-      this.nodes = this.nodes.filter((n) => n.subscriptionId !== id).concat(parsed);
-      this.ensureUniqueNames();
+      const parsed = commit.nodes;
       sub.nodeCount = parsed.length;
       sub.lastFetchedAt = Date.now();
       sub.lastRefreshResult = SubscriptionRefreshStatus.OK;
@@ -2010,60 +2162,24 @@ export class SubscriptionService {
       return SubscriptionRefreshResult.ok(localCount, diagnostics);
     }
     try {
-      YamlMerger.resetSkipStats();
-      let parsed: ProxyNode[];
-      let parsedGroups: ProxyGroup[] = [];
-      const structuredYaml = YamlMerger.proxyItemGroups(body).length > 0;
-      if (structuredYaml) {
-        const merged: MergedProxy[] = YamlMerger.merge([body], sub.name, '');
-        SubscriptionService.absorbYamlMergeStats(diagnostics);
-        parsed = SubscriptionService.mergedToNodes(merged, id, diagnostics);
-        parsedGroups = SubscriptionParser.parseProxyGroups(body, id);
-        diagnostics.inputCount = diagnostics.inputCount + parsed.length
-          + diagnostics.invalidCount + diagnostics.unsupportedCount;
-      } else {
-        const parseResult = SubscriptionParser.parseDetailed(body, id);
-        parsed = parseResult.nodes;
-        parsedGroups = parseResult.groups;
-        diagnostics.inputCount = diagnostics.inputCount + parseResult.diagnostics.inputCount;
-        diagnostics.duplicateCount = diagnostics.duplicateCount + parseResult.diagnostics.duplicateCount;
-        if (parseResult.diagnostics.invalidCount > 0) {
-          SubscriptionService.noteInvalidBulk(diagnostics, parseResult.diagnostics.invalidCount,
-            `无效链接 ${parseResult.diagnostics.invalidCount} 条`);
-        }
-        diagnostics.unsupportedCount = diagnostics.unsupportedCount + parseResult.diagnostics.unsupportedCount;
-        diagnostics.unsupportedTypes = SubscriptionService.mergeTypes(diagnostics.unsupportedTypes,
-          parseResult.diagnostics.unsupportedTypes);
-      }
-      const providerEntries = ProxyProviderParser.parse(body);
-      if (providerEntries.length > 0) {
-        const providerImported = await this.appendProviderNodes(providerEntries, id,
-          '', '', parsed, diagnostics);
-        AppLogger.info(TAG, `local refresh imported ${providerImported} provider node(s) `
-          + `for subscription ${id}`);
-      }
-      if (parsed.length === 0) {
+      const out = await this.parseImportBody({
+        body: body, subId: id, subName: sub.name, prevYaml: '',
+        headerName: '', headerValue: '',
+        writeYamlCache: false, logTag: `local subscription ${id}`,
+      }, diagnostics);
+      const commit = this.commitImportNodes(out.parsed, out.parsedGroups,
+        { subId: id, replaceGroupsEvenIfEmpty: false, isNewSub: false }, diagnostics);
+      if (commit.code === 'empty') {
         sub.lastRefreshResult = SubscriptionRefreshStatus.EMPTY_ENTRIES;
         return SubscriptionRefreshResult.fail(SubscriptionRefreshStatus.EMPTY_ENTRIES,
           '重解析未得到节点（原文件内容可能已变化）', diagnostics);
       }
-      if (!SubscriptionFetchPolicy.isNodeCountAllowed(parsed.length)) {
+      if (commit.code === 'limit') {
         sub.lastRefreshResult = SubscriptionRefreshStatus.LIMIT_EXCEEDED;
-        diagnostics.limitCount = diagnostics.limitCount + 1;
-        SubscriptionService.appendInvalidReason(diagnostics, `节点数量 ${parsed.length} 超过 2000 上限`);
         return SubscriptionRefreshResult.fail(SubscriptionRefreshStatus.LIMIT_EXCEEDED,
-          `节点数量 ${parsed.length} 超过 2000 个上限，未写入任何节点`, diagnostics);
+          `节点数量 ${out.parsed.length} 超过 2000 个上限，未写入任何节点`, diagnostics);
       }
-      if (this.hiddenNodes.length > 0) {
-        parsed = parsed.filter((n) => !this.hiddenNodes.includes(SubscriptionService.nodeKey(n)));
-      }
-      SubscriptionParser.materializeDynamicGroups(parsedGroups, parsed);
-      // 分组仅在有新解析结果时替换（yaml_cache 退路无组信息，不能因此清空既有组）
-      if (parsedGroups.length > 0) {
-        this.proxyGroups = this.proxyGroups.filter((g) => g.subscriptionId !== id).concat(parsedGroups);
-      }
-      this.nodes = this.nodes.filter((n) => n.subscriptionId !== id).concat(parsed);
-      this.ensureUniqueNames();
+      const parsed = commit.nodes;
       sub.nodeCount = parsed.length;
       sub.lastFetchedAt = Date.now();
       sub.lastRefreshResult = SubscriptionRefreshStatus.OK;
@@ -2091,6 +2207,22 @@ export class SubscriptionService {
     // 三入口统一诊断：本地 YAML 与 URL 订阅 / 链接文本展示同一组指标
     const diagnostics = new SubscriptionImportDiagnostics();
     this.lastImportDiagnostics = diagnostics;
+    // 历史展示名（内层建 sub 之前就可能返回，如空文件；与内层命名口径一致）
+    const base = fileName.replace(/\.(ya?ml|txt)$/i, '');
+    const displayName = `本地:${base.length > 0 ? base : '订阅'}`;
+    try {
+      return await this.addLocalYamlInner(fileName, content, diagnostics);
+    } finally {
+      this.recordImportHistory('local', displayName, '', diagnostics);
+      if (diagnostics.addedCount > 0) {
+        this.mutateEpoch = this.mutateEpoch + 1;
+      }
+    }
+  }
+
+  /** addLocalYaml 内层（管线本体；外层只负责诊断装配与历史记录） */
+  private async addLocalYamlInner(fileName: string, content: string,
+    diagnostics: SubscriptionImportDiagnostics): Promise<number> {
     const base = fileName.replace(/\.(ya?ml|txt)$/i, '');
     const trimmed = content.trim();
     if (trimmed.length === 0) {
@@ -2100,52 +2232,13 @@ export class SubscriptionService {
     const sub = Subscription.newSubscription(util.generateRandomUUID(),
       `本地:${base.length > 0 ? base : '订阅'}`, `local://${base}`);
     sub.sortOrder = this.subscriptions.length;
-    let parsed: ProxyNode[];
-    let parsedGroups: ProxyGroup[] = [];
-    /** 双轨：原文是否为 Clash YAML（决定能否作为内核 file provider 落盘） */
-    let localEligible = false;
+    let out: ImportParseOutput;
     try {
-      YamlMerger.resetSkipStats();
-      localEligible = YamlMerger.proxyItemGroups(trimmed).length > 0;
-      if (localEligible) {
-        const merged: MergedProxy[] = YamlMerger.merge([trimmed], sub.name, '');
-        SubscriptionService.absorbYamlMergeStats(diagnostics);
-        parsed = SubscriptionService.mergedToNodes(merged, sub.id, diagnostics);
-        parsedGroups = SubscriptionParser.parseProxyGroups(trimmed, sub.id);
-        diagnostics.inputCount = diagnostics.inputCount + parsed.length + diagnostics.invalidCount
-          + diagnostics.unsupportedCount;
-        if (this.store !== null) {
-          await this.store.put(`yaml_cache_${sub.id}`, YamlMerger.toYaml(merged));
-        }
-      } else {
-        const parseResult = SubscriptionParser.parseDetailed(trimmed, sub.id);
-        parsed = parseResult.nodes;
-        parsedGroups = parseResult.groups;
-        diagnostics.inputCount = diagnostics.inputCount + parseResult.diagnostics.inputCount;
-        diagnostics.duplicateCount = diagnostics.duplicateCount + parseResult.diagnostics.duplicateCount;
-        if (parseResult.diagnostics.invalidCount > 0) {
-          SubscriptionService.noteInvalidBulk(diagnostics, parseResult.diagnostics.invalidCount,
-            `无效链接 ${parseResult.diagnostics.invalidCount} 条`);
-        }
-        diagnostics.unsupportedCount = diagnostics.unsupportedCount + parseResult.diagnostics.unsupportedCount;
-        diagnostics.unsupportedTypes = SubscriptionService.mergeTypes(diagnostics.unsupportedTypes,
-          parseResult.diagnostics.unsupportedTypes);
-      }
-      if (YamlMerger.lastSkippedCount > 0) {
-        AppLogger.warn(TAG, `local yaml skipped ${YamlMerger.lastSkippedCount} node(s) `
-          + `of unsupported type(s): ${YamlMerger.lastSkippedTypes}`);
-      }
-
-      // ---- proxy-providers：本地 YAML 的 provider 段同样拉取（对齐 mihomo 语义）----
-      // mihomo 的 include-all/use 组包含 provider 节点；本地导入不拉取的话，
-      // 「全部节点/国家组」与内核客户端（BettBox 等）的分组内容差距巨大。
-      const providerEntries = ProxyProviderParser.parse(trimmed);
-      if (providerEntries.length > 0) {
-        const providerImported = await this.appendProviderNodes(providerEntries, sub.id,
-          '', '', parsed, diagnostics);
-        AppLogger.info(TAG, `local yaml imported ${providerImported} provider node(s) `
-          + `from ${providerEntries.length} provider declaration(s)`);
-      }
+      out = await this.parseImportBody({
+        body: trimmed, subId: sub.id, subName: sub.name, prevYaml: '',
+        headerName: '', headerValue: '',
+        writeYamlCache: true, logTag: `local yaml ${sub.id}`,
+      }, diagnostics);
     } catch (e) {
       if (e instanceof YamlMergeError) {
         // 合并限额与解析失败分开：超限必须能被用户看见，而不是笼统「解析失败」
@@ -2157,34 +2250,26 @@ export class SubscriptionService {
       AppLogger.warn(TAG, `local yaml parse failed: ${SubscriptionService.describeError(e)}`);
       return 0;
     }
-    if (parsed.length === 0) {
+    const commit = this.commitImportNodes(out.parsed, out.parsedGroups,
+      { subId: sub.id, replaceGroupsEvenIfEmpty: true, isNewSub: true }, diagnostics);
+    if (commit.code === 'empty') {
       SubscriptionService.noteInvalid(diagnostics, '内容未解析出节点');
       return 0;
     }
-    if (!SubscriptionFetchPolicy.isNodeCountAllowed(parsed.length)) {
-      AppLogger.warn(TAG, `local import rejected: ${parsed.length} nodes exceed 2000 limit`);
-      diagnostics.limitCount = diagnostics.limitCount + 1;
-      SubscriptionService.appendInvalidReason(diagnostics, `节点数量 ${parsed.length} 超过 2000 上限`);
+    if (commit.code === 'limit') {
+      AppLogger.warn(TAG, `local import rejected: ${out.parsed.length} nodes exceed 2000 limit`);
       return 0;
     }
-    if (this.hiddenNodes.length > 0) {
-      const visible = parsed.filter((n) => !this.hiddenNodes.includes(SubscriptionService.nodeKey(n)));
-      diagnostics.hiddenCount = parsed.length - visible.length;
-      parsed = visible;
-    }
-    // 动态分组物化后随本地导入一并入库
-    SubscriptionParser.materializeDynamicGroups(parsedGroups, parsed);
-    this.proxyGroups = this.proxyGroups.filter((g) => g.subscriptionId !== sub.id).concat(parsedGroups);
+    const parsed = commit.nodes;
     this.subscriptions.push(sub);
-    this.nodes = this.nodes.concat(parsed);
-    this.ensureUniqueNames();
     sub.nodeCount = parsed.length;
     sub.lastFetchedAt = Date.now();
     sub.lastRefreshResult = SubscriptionRefreshStatus.OK;
     diagnostics.addedCount = parsed.length;
     diagnostics.configMissingCredentialCount = this.credentialMissingCount;
     // ── 双轨：本地导入的原文同样落盘作为 provider（开关开启时；失败自动降级）──
-    this.writeRawProvider(sub, trimmed, localEligible, diagnostics);
+    // 原文是否为 Clash YAML（决定能否作为内核 file provider 落盘）由共用管线判定
+    this.writeRawProvider(sub, trimmed, out.structuredYaml, diagnostics);
     this.updateRawProviderSummary(diagnostics);
     let credentialFailed = 0;
     try {
@@ -2396,6 +2481,19 @@ export class SubscriptionService {
   async addDirectNode(uri: string): Promise<number> {
     const diagnostics = new SubscriptionImportDiagnostics();
     this.lastImportDiagnostics = diagnostics;
+    try {
+      return await this.addDirectNodeInner(uri, diagnostics);
+    } finally {
+      this.recordImportHistory('direct', '直接节点', DIRECT_GROUP_ID, diagnostics);
+      if (diagnostics.addedCount > 0) {
+        this.mutateEpoch = this.mutateEpoch + 1;
+      }
+    }
+  }
+
+  /** addDirectNode 内层（管线本体；外层只负责诊断装配与历史记录） */
+  private async addDirectNodeInner(uri: string,
+    diagnostics: SubscriptionImportDiagnostics): Promise<number> {
     diagnostics.inputCount = 1;
     let node: ProxyNode | null = null;
     try {
@@ -2736,4 +2834,8 @@ export class SubscriptionJson {
   rawProviderNodeEstimate?: number;
   /** ETag/Last-Modified 条件请求凭据（旧存储无此键，读取端 ?? '' 兜底） */
   etag?: string;
+  /** 面板建议更新间隔小时数（旧存储无此键，读取端 ?? 0 兜底） */
+  updateIntervalHours?: number;
+  /** 服务端建议文件名（旧存储无此键，读取端 ?? '' 兜底） */
+  remoteFileName?: string;
 }

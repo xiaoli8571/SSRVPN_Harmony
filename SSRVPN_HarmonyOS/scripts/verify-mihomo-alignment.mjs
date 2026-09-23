@@ -290,8 +290,8 @@ console.log('\n[7] ETag 条件请求（304 = 内容未变，不得当成拉取�
   ok(subCalls.length === 2, `订阅自身有 2 处 fetch 调用（实际 ${subCalls.length}）`);
   ok(subCalls.every(c => /sub\.etag/.test(c)),
     `订阅自身的 fetch 都传了 etag: ${JSON.stringify(subCalls.map(c => /sub\.etag/.test(c)))}`);
-  ok(fetchCalls.length - subCalls.length === 2,
-    `provider 拉取不借用订阅 etag（另有 ${fetchCalls.length - subCalls.length} 处 provider 拉取）`);
+  ok(fetchCalls.length - subCalls.length === 1,
+    `provider 拉取收口为 appendProviderNodes 一处（另有 ${fetchCalls.length - subCalls.length} 处 provider 拉取）`);
 }
 
 // ── 8. 失败原因分类（人话建议，真机实测的错误码都要有归宿） ────────────────

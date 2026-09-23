@@ -39,8 +39,9 @@
    "没测过"。**两者都不是有效延迟**。
 6. **取消不释放内核 socket**：`getProxyDelay` 用 `context.Background()`，abort 只是
    客户端行为，内核会继续拨号到自己的 timeout → 并发上限是控制负载的唯一手段。
-7. `unified-delay` 下 `http://` 测速 URL 在劫持型代理里会失败（mihomo 官方警告）
-   → 统一 HTTPS。
+ 7. `unified-delay` 下 `http://` 测速 URL 的官方警告（劫持型代理）在捆绑内核里是
+   **非致命**的：`adapter/adapter.go` 对第二次 HEAD 失败只打日志并回退用第一次响应。
+   → 修订（见"七、对齐主流客户端"）：默认测速 URL 采用 **http**，不再强制 HTTPS。
 
 ## 三、新架构
 
@@ -55,7 +56,7 @@
                       └─────────────────────────────────────────────┘
                                       │
                             LatencyEngine（唯一入口）
-        · 有界并发 8（移动端，取主流客户端 5~16 的下沿；内核侧无上限，客户端必须自律）
+        · 有界并发 32（移动端；请求为轻量 GET /delay，内核侧无压力，137 节点全批约 22s）
         · 队列等待与探测计时**分离**（单节点预算 5000ms，不跨节点累计）
         · 首批请求错峰抖动 0~200ms，避免整批同时撞内核
         · 整批硬截止 90s：到点未完成的节点保持**未测**，绝不写失败
@@ -116,7 +117,7 @@
 
 - `scripts/test-latency-engine.js`（取代已删除的 `test-latency-pipeline.js`）：
   源码级接线与**旧缺陷不许复活**的负向断言 —— 唯一入口、禁止 `/group/*/delay`、
-  未连接路径必须经 `ensureLatencyApi`、HTTPS URL、并发上限、`timeout` 显式且 ≤32767、
+  未连接路径必须经 `ensureLatencyApi`、http URL、并发上限、`timeout` 显式且 ≤32767、
   硬截止不写失败、取消≠失败、通道不可用≠节点失败、组条目过滤、回收安全闸、
   生成器逐字节未变（指纹 `scripts/latency-gen-fingerprint.json`）。
 - `scripts/verify-latency-cache.mjs`：把 `LatencyState.ets` / `LatencyController.ets`
@@ -126,3 +127,101 @@
   static readonly 而非 `enum`。）
 - 真机实证：已连接（隧道 controller）与未连接（headless 内核）各测一轮，
   记录 106 节点的完成耗时与各状态分布。
+
+## 七、对齐主流客户端（用户反馈"正常节点测出超时"的修正）
+
+**症状**：用户反馈节点测速经常把正常节点标成"超时"；同一批节点在其他 Clash
+客户端上测速正常；调整并发无效。
+
+**对照结论**（mihomo 内核源码 + 主流客户端 + 本仓 `tools/true-chain-harness/*`
+真机探针三方交叉）：
+
+| 项 | 修正前（SSRVPN） | 主流客户端出厂默认 | 本仓探针 |
+|---|---|---|---|
+| 测试 URL | 强制 `https://` gstatic，且页面把用户填的 http 改回 https | CFW `cfw-latency-url` / CMFA / v2rayN / clash-linux：**`http://www.gstatic.com/generate_204`** | `http://` |
+| 单节点 timeout | 5000ms | CFW `cfw-latency-timeout: 8000`（v2rayN 10000） | 8000 |
+| unified-delay | true | 混合（Verge 注入 true） | true |
+
+**根因**：内核 `(*Proxy).URLTest` 对 https URL 要**过节点**做一次 TLS 握手，
+`unified-delay` 下还发两次 HEAD；受限出口（TLS 分片 / SNI 干扰 / 回国节点）上
+握手挂起直到 context 预算耗尽 → `getProxyDelay` 回 **504** → 好节点被标"超时"。
+http 的 generate_204 是 1-RTT 小请求、无 TLS，失败面更小且每次省一次握手。
+（预算本身不是误报根因 —— 换成 http 后 5000 对真机健康节点 ~522ms 有 10 倍余量。）
+
+**修正**（本轮）：
+
+1. `LATENCY_TEST_URL` / `LATENCY_TEST_URL_ALT` 改 **http**（gstatic / cp.cloudflare）；
+2. `NodeSelectionPage.testUrlForLatency` **尊重用户配置**（http/https 均接受），
+   删除"非 https 一律回落"的强制覆盖；
+3. `LatencyPolicy.DEFAULT_TIMEOUT_MS` 终值 **5000**（外层 HTTP = +1200）：
+   一期曾对齐 CFW 调到 8000，装机后用户反馈"超时节点处理较慢"——死节点必须
+   占满整个预算才出结论（排空吞吐 = 并发 ÷ 预算），且真机健康节点最高仅
+   ~522ms（`latency-ondevice-evidence.md`），5000 与 mihomo `NewHealthCheck`
+   内核默认 / Verge·party 出厂值一致 → 回调；
+4. `LATENCY_CONCURRENCY` 8 → 16 → **32**（用户实测 137 节点批在 16 下仍偏慢；
+   超时排空吞吐 = 并发 ÷ 预算，32×5000ms → 137 节点全批约 22s）：
+5. `AppSettings.testLatencyUrl` 出厂默认改 http，`fromJson` 把存量旧出厂值
+   （https gstatic，设置页无编辑入口 → 存量必是它）迁移到新默认；
+6. 回归断言同步反转：`scripts/test-latency-engine.js` 第 4 节、
+   `scripts/verify-latency-engine-runtime.mjs` 的 URL 契约。
+
+**不动**：`unified-delay: true`（热测第二次 HEAD 只计
+热 RTT，准确性更好）、`/group/*/delay` 禁用、`BATCH_DEADLINE_MS=90000`、
+`ClashConfigGenerator`（组 health-check URL 维持 mihomo 默认 https；
+生成器指纹因 09-19 mihomo 对齐与 09-23 订阅优化（override prefix、snell
+校验）两次**有意改动**漂移过，均已重定基线 `latency-gen-fingerprint.json`）、
+五态状态机与通道自愈（真机已验证正确）。
+
+## 九、启动卡"联网下载"（geoip/rule-set 完整性 + 原子写）
+
+**现场**（真机 2026-09-23）：连接 VPN 失败，报错映射为"内核卡在联网下载…"。
+原始错误 = 扩展回写 `vpn_start_error.txt` 的 `内核启动超时（20s 无响应）`
+—— `coreBridge.startCore` native 调用 20s 未返回。
+
+**根因**：geoip.metadb / hyper-adrules(.mrs) 的后台下载**直接 TRUNC 目标文件**，
+进程被杀/扩展停止会留下半截文件；而就绪检查只看 `size > 0`，半截文件被误判
+就绪 → 配置带 GEOIP/RULE-SET → 内核 Parse 时校验失败**重新联网下载** → 启动
+阻塞 → 超时。另有两个次级窗口：下载进行中（`geoipDownloading`）时点连接同样
+误判；geoip 就绪下限（`size>0`）与下载下限（100KB）不一致。
+
+**修正**：
+1. `isGeoipReady()` / `isRuleProviderReady()`：完整性下限（geoip >100KB、
+   mrs >1KB，与下载侧一致）+ 下载进行中视为未就绪 + 坏文件顺手删除；
+2. 两个下载改**原子写**（先写 `.tmp` 再 `renameSync`）；
+3. connect 与测速核路径统一走这两个判据（原内联 `size>0` 检查删除）。
+
+降级语义不变：文件未就绪 → 配置不含 GEOIP/RULE-SET → 内核零联网下载，
+后台补齐后下次连接生效。
+
+## 八、配置过期自愈（NexPanel 导入后 7 节点全 404）
+
+**现场**（真机 hilog，2026-09-23 15:14）：headless 测速内核 15:14:32 启动
+（配置快照 = 导入前的 70 节点）；15:14:39 `subscription added: NexPanel`；
+随后批次 37 次 `latency non-200: code=404 kind=switch_failed`（每次 4–23ms，
+controller 秒回"查无此代理"，根本没拨号），7 个新节点被盖章成「失败」。
+内核重建（配置刷成最新）后恢复正常 —— 典型的"刚导入不正常，过会儿正常"。
+
+**根因**（两处咬合）：
+1. 内核配置是**启动瞬间的快照**（`launchTestCore` 按当时 subs 生成 yaml），
+   `ensureTestCore` 复用分支只验通道可用、**从不验配置新鲜度**，且没有任何
+   订阅变更监听去 invalidate 测速内核；
+2. 引擎把 404（内核代理表无此名）当成**节点结论**记「失败」—— 404 是配置/
+   通道问题，不是节点问题。
+
+**修正**：
+1. `ConnectionOrchestrator.fingerprintLatencyInput(subs, settings)`（纯函数）：
+   `subscriptionId|name|server|port|protocol` 排序哈希 + 订阅 id/enabled +
+   组签名 + 生成器实际消费的设置子集（proxyMode、proxyGroupSelections、
+   rulesEnabled、hyperAdRulesEnabled、customRules、forceDirect/ProxySites、
+   useRawProviderConfig）。端口分配 / DoH / hosts 不进指纹；
+2. `launchTestCore` 成功后记录指纹；`ensureTestCore` 复用分支比对，漂移 →
+   打日志 + `stopTestCore()` + 走正常启动（headless 启动约 200ms~2s）；
+3. `rebuildTestCoreForLatency()`：先过 busy/authority 门禁（**绝不动正在用
+   的真实隧道**），再停后起，供引擎调用；
+4. 引擎：CORE 通道 404 首轮进 `staleQueue`（记 `stale404`，不发布结论），
+   收齐后重建一次内核再测一轮；重建后还 404 才是真删除，走正常 FAILED；
+   重建被拒/失败/超时/取消 → 保持未测（收尾 `clearOwnTestingMarks` 兜底）。
+   重试波不再重复计 `finished`（首波已计过）。
+
+**刻意不碰**：已连接隧道态的同类过期（connect 时快照）——修它要重连 VPN，
+属于打断行为，另议；本轮只保证新节点不被盖章成失败（保持未测 + 日志）。

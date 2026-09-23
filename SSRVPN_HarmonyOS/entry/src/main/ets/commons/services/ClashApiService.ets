@@ -161,10 +161,12 @@ export class ClashApiService {
   }
 
   private errText(e: Object): string {
+    // 委托 AppLogger.errText：BusinessError 形态（{code,message}）的普通对象
+    // 只会 String 成 "[object Object]"，真机日志里曾全是它，无法诊断。
     if (e instanceof Error) {
       return e.message;
     }
-    return String(e);
+    return AppLogger.errText(e);
   }
 
   /** 等待 API 就绪（对应 MihomoApiWaiter），超时返回 false */

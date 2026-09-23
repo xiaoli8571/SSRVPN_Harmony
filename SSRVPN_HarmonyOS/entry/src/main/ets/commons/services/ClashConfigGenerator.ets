@@ -249,6 +249,12 @@ export class ClashConfigGenerator {
         lines.push('    type: file');
         // path 语义见 RawSubscriptionStore 顶部注释：默认相对内核 HomeDir(=cacheDir)
         lines.push(`    path: "${ClashConfigGenerator.escapeYaml(entry.providerPath)}"`);
+        // override.additional-prefix 命名空间隔离（对齐 Verge/Stash 的多订阅用法）：
+        // App 侧 ensureUniqueProxyNames 只管静态段；原文内若有重名，两个 provider
+        // 或 provider 与静态段同名会让内核整份拒载（mihomo duplicate proxy）。
+        // 每订阅加固定前缀后互相隔离，也避免与解析链节点撞名。
+        lines.push('    override:');
+        lines.push(`      additional-prefix: "[${ClashConfigGenerator.escapeYaml(entry.providerName)}] "`);
         if (RAW_PROVIDER_HEALTH_CHECK_ENABLED) {
           lines.push('    health-check:');
           lines.push('      enable: true');
@@ -606,6 +612,10 @@ export class ClashConfigGenerator {
       return ProxyDropReason.MISSING_CREDENTIAL;
     }
     if (proxyType === 'anytls' && n.password.length === 0) {
+      return ProxyDropReason.MISSING_CREDENTIAL;
+    }
+    if (proxyType === 'snell' && n.password.length === 0) {
+      // snell 内核必填 psk(=password)：空 psk 的节点整份拒载（同 tuic/hysteria 口径）
       return ProxyDropReason.MISSING_CREDENTIAL;
     }
     if (n.alterId < 0 || !Number.isInteger(n.alterId)) {

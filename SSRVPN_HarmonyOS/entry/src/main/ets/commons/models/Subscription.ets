@@ -19,6 +19,16 @@ export class Subscription {
   /** 上次成功拉取的原始内容缓存 key（源缓存） */
   lastFetchedAt: number = 0;
   lastRefreshResult: string = '';
+  /**
+   * 面板建议的自动更新间隔（小时，`profile-update-interval` 头）。
+   * 0 = 面板没给。只做解析与落库（展示/调度后续再接）。
+   */
+  updateIntervalHours: number = 0;
+  /**
+   * 服务端建议的文件名（`content-disposition` 头，已取 basename 并限长）。
+   * '' = 没给。只做解析与落库。
+   */
+  remoteFileName: string = '';
   nodeCount: number = 0;
   uploadBytes: number = -1;
   downloadBytes: number = -1;
@@ -70,6 +80,8 @@ export class Subscription {
     j.rawProviderState = s.rawProviderState;
     j.rawProviderNodeEstimate = s.rawProviderNodeEstimate;
     j.etag = s.etag;
+    j.updateIntervalHours = s.updateIntervalHours;
+    j.remoteFileName = s.remoteFileName;
     return j;
   }
 
@@ -94,6 +106,8 @@ export class Subscription {
     s.rawProviderNodeEstimate = j.rawProviderNodeEstimate ?? 0;
     // 同理：etag 是后加字段，旧存储没有 → 空串 = 下次做完整拉取
     s.etag = j.etag ?? '';
+    s.updateIntervalHours = j.updateIntervalHours ?? 0;
+    s.remoteFileName = j.remoteFileName ?? '';
     return s;
   }
 }
@@ -118,6 +132,53 @@ export enum SubscriptionRefreshStatus {
    * 和 parseError（内容无法识别）区分开，提示可能是面板按 UA 返回空列表。
    */
   EMPTY_ENTRIES = 'emptyEntries'
+}
+
+/** 导入/刷新历史条目 JSON 形态（只存摘要，不要原文/凭据） */
+export class ImportHistoryJson {
+  atMs: number = 0;
+  kind: string = '';
+  subName: string = '';
+  subId: string = '';
+  summary: string = '';
+  addedCount: number = 0;
+}
+
+/**
+ * 导入/刷新历史条目：最近 N 次导入/刷新的摘要（诊断面板可查）。
+ * Toast 一闪而过查不到历史是用户报障时的盲区；这里只记摘要文本，
+ * 不记订阅原文与任何凭据。
+ */
+export class ImportHistoryEntry {
+  atMs: number = 0;
+  /** 'refresh' | 'local' | 'direct' */
+  kind: string = '';
+  subName: string = '';
+  subId: string = '';
+  summary: string = '';
+  addedCount: number = 0;
+
+  toJson(): ImportHistoryJson {
+    const j = new ImportHistoryJson();
+    j.atMs = this.atMs;
+    j.kind = this.kind;
+    j.subName = this.subName;
+    j.subId = this.subId;
+    j.summary = this.summary;
+    j.addedCount = this.addedCount;
+    return j;
+  }
+
+  static fromJson(j: ImportHistoryJson): ImportHistoryEntry {
+    const e = new ImportHistoryEntry();
+    e.atMs = typeof j.atMs === 'number' ? j.atMs : 0;
+    e.kind = typeof j.kind === 'string' ? j.kind : '';
+    e.subName = typeof j.subName === 'string' ? j.subName : '';
+    e.subId = typeof j.subId === 'string' ? j.subId : '';
+    e.summary = typeof j.summary === 'string' ? j.summary : '';
+    e.addedCount = typeof j.addedCount === 'number' ? j.addedCount : 0;
+    return e;
+  }
 }
 
 /** 三种导入入口共用的诊断统计，所有跳过原因均显式可见。 */

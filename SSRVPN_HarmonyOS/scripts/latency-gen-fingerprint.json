@@ -1,1 +1,4 @@
-﻿{ "sha256_16": "5ab38f01073978b3", "note": "ClashConfigGenerator.ets 指纹：延迟测试重做不得改动配置生成器。若确实需要改动，请同步更新本文件并在 docs/latency-redesign.md 说明原因。" }
+﻿{
+  "sha256_16": "090441fe6cceacc2",
+  "note": "ClashConfigGenerator.ets 指纹。2026-09-19 16:22 首次记录 5ab38f01073978b3；同日 18:36 的 mihomo 对齐改动（client-fingerprint/fingerprint 键拆分）更新了生成器但未同步本文件 → 2026-09-23 测速对齐会话重定基线 336cba112443e0bd（未触碰生成器）；同日订阅优化会话有意改动生成器（proxy-providers override.additional-prefix 命名隔离、snell 必填 psk 校验）→ 重定基线 090441fe6cceacc2（见 docs/subscription-parsing-review.md 与 latency-redesign.md 第七节）。若再次变动，请同步更新本文件并说明原因。"
+}

@@ -5,8 +5,10 @@
  *                subscription_parser_naming_part.dart
  *                subscription_parser_yaml_part.dart
  *
- * 支持：ssr:// / ss:// / vless:// / vmess:// / trojan:// / hysteria2://(hy2://) 单链接、
- *       Base64 批量列表、Clash YAML proxies。
+ * 支持：ssr:// / ss://(SIP002 plugin 透传) / vless:// / vmess:// / trojan:// /
+ *       hysteria2://(hy2://) / tuic:// / anytls:// / hysteria:// / wireguard:// 单链接、
+ *       SIP008 多用户 JSON、Base64 批量列表、Clash YAML proxies；
+ *       明文段 / base64 段 / YAML 段可混合共存（各段全跑，seen 去重）。
  */
 import { ProxyNode, ProxyNodeType, SsrCodec } from '../models/ProxyNode';
 import { ProxyGroup } from '../models/ProxyGroup';
@@ -93,6 +95,9 @@ export class SubscriptionParser {
 
     const normalized = text.replace(/^\uFEFF/, '');
     result.groups = SubscriptionParser.parseProxyGroups(normalized, subscriptionId);
+    // 0) SIP008 多用户 JSON（{"version":1,"servers":[...]}，v2rayN 格式）：
+    // 与链接/YAML 段共存时同样提取。
+    SubscriptionParser.parseSip008(normalized, subscriptionId, add, diagnostics);
     // scheme 注册表分发：有解析器 → fromUri + add（去重/originalName 冻结），未识别 scheme → unsupported
     const addFromUri = (trimmed: string): void => {
       diagnostics.inputCount = diagnostics.inputCount + 1;
@@ -108,7 +113,9 @@ export class SubscriptionParser {
       diagnostics.unsupportedCount = diagnostics.unsupportedCount + 1;
       SubscriptionParser.noteUnsupported(diagnostics, trimmed);
     };
-    // 1) 明文链接逐行解析
+    // 1) 明文链接逐行解析（含夹在文本里的单行 base64 块：混合订阅。
+    //    混合文本整段解码必然失败（:// 不是 base64 字符），所以逐行尝试；
+    //    解不出 :// 即放弃，不计入诊断，与过去行为一致。）
     for (const line of normalized.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (trimmed.length === 0) {
@@ -116,13 +123,26 @@ export class SubscriptionParser {
       }
       if (SubscriptionParser.isProxyUri(trimmed)) {
         addFromUri(trimmed);
+      } else if (SubscriptionParser.looksLikeBase64Line(trimmed)) {
+        const decodedLine = SsrCodec.decodeBase64Url(trimmed);
+        if (decodedLine.includes('://')) {
+          for (const inner of decodedLine.split(/\r?\n/)) {
+            const t = inner.trim();
+            if (t.length > 0 && SubscriptionParser.isProxyUri(t)) {
+              addFromUri(t);
+            }
+          }
+        }
       }
     }
 
-    // 2) 整体 Base64 解码后再解析（对应 subscription_parser_base64_part）
+    // 2) 整体 Base64 解码后再解析（纯 base64 订阅；混合文本整段解码必然失败，
+    // decodeBase64Url 失败返回空串，直接跳过）。
+    // base64 编码后的 Clash YAML（解出 proxies: 而非链接）不在此逐行计数，
+    // 留给第 3 段，否则会把 YAML 每一行都记成 invalid。
     if (nodes.length === 0) {
       const decoded = SsrCodec.decodeBase64Url(normalized.replace(/\s+/g, ''));
-      if (decoded.length > 0 && decoded.includes('://')) {
+      if (decoded.length > 0 && decoded.includes('://') && !decoded.includes('proxies:')) {
         for (const line of decoded.split(/\r?\n/)) {
           const trimmed = line.trim();
           if (trimmed.length === 0) {
@@ -138,20 +158,27 @@ export class SubscriptionParser {
       }
     }
 
-    // 3) Clash YAML proxies 提取（对应 subscription_parser_yaml_part；完整 YAML 语义由 ClashConfigGenerator 的解析支持）
-    if (nodes.length === 0) {
-      const groups = YamlMerger.proxyItemGroups(normalized);
-      diagnostics.inputCount = groups.length;
-      YamlMerger.resetSkipStats();
-      const yamlNodes = SubscriptionParser.parseClashYaml(normalized, subscriptionId, counter);
-      for (const n of yamlNodes) {
-        add(n);
-      }
-      diagnostics.unsupportedCount = YamlMerger.lastSkippedCount;
-      diagnostics.unsupportedTypes = YamlMerger.lastSkippedTypes;
-      const accounted = nodes.length + diagnostics.duplicateCount + diagnostics.unsupportedCount;
-      diagnostics.invalidCount = Math.max(0, diagnostics.inputCount - accounted);
+    // 3) Clash YAML proxies 提取：与明文段共存时同样提取（混合订阅）。
+    // 诊断按段累加 —— 旧实现直接覆盖 unsupported/input，且 nodes 非空时整段
+    // 跳过（混合订阅的 YAML 主体丢失），还会把第 1/2 段的计数清零。
+    const nodesBeforeYaml = nodes.length;
+    const dupBeforeYaml = diagnostics.duplicateCount;
+    const unsupBeforeYaml = diagnostics.unsupportedCount;
+    const groups = YamlMerger.proxyItemGroups(normalized);
+    YamlMerger.resetSkipStats();
+    const yamlNodes = SubscriptionParser.parseClashYaml(normalized, subscriptionId, counter);
+    for (const n of yamlNodes) {
+      add(n);
     }
+    diagnostics.inputCount = diagnostics.inputCount + groups.length;
+    diagnostics.unsupportedCount = diagnostics.unsupportedCount + YamlMerger.lastSkippedCount;
+    diagnostics.unsupportedTypes = SubscriptionParser.mergeUnsupportedTypes(
+      diagnostics.unsupportedTypes, YamlMerger.lastSkippedTypes);
+    const yamlAdded = nodes.length - nodesBeforeYaml;
+    const yamlDup = diagnostics.duplicateCount - dupBeforeYaml;
+    const yamlUnsup = diagnostics.unsupportedCount - unsupBeforeYaml;
+    diagnostics.invalidCount = diagnostics.invalidCount
+      + Math.max(0, groups.length - (yamlAdded + yamlDup + yamlUnsup));
 
     AppLogger.info(TAG, `parsed ${nodes.length} nodes for subscription ${subscriptionId}`);
     result.nodes = nodes;
@@ -516,6 +543,73 @@ export class SubscriptionParser {
       types.add(type);
     }
     diagnostics.unsupportedTypes = Array.from(types).join(',');
+  }
+
+  /** 单行 base64 块的廉价预检：避免对每行垃圾文本都跑一次解码 */
+  private static looksLikeBase64Line(trimmed: string): boolean {
+    if (trimmed.length < 16 || trimmed.length > 65536) {
+      return false;
+    }
+    return /^[A-Za-z0-9+/=_-]+$/.test(trimmed);
+  }
+
+  /** 合并两段 unsupportedTypes（逗号分隔、去重、上限 12，与 noteUnsupported 同口径） */
+  private static mergeUnsupportedTypes(a: string, b: string): string {
+    const types = new Set<string>();
+    for (const part of (a + ',' + b).split(',')) {
+      if (part.length > 0 && types.size < 12) {
+        types.add(part);
+      }
+    }
+    return Array.from(types).join(',');
+  }
+
+  /**
+   * SIP008 多用户 JSON：{"version":1,"servers":[{"remarks":"..","server":"..",
+   * "server_port":8388,"password":"..","method":"aes-256-gcm",...}]}。
+   * 逐 server 转 ss 节点；非法条目记 invalid（经 add(null)，与其他段口径一致）。
+   */
+  private static parseSip008(text: string, subscriptionId: string,
+    add: (node: ProxyNode | null) => void, diagnostics: SubscriptionParseDiagnostics): void {
+    const trimmed = text.trim();
+    if (!trimmed.startsWith('{')) {
+      return;
+    }
+    let servers: Object[] | null = null;
+    try {
+      const obj = JSON.parse(trimmed) as Record<string, Object>;
+      const raw = obj['servers'];
+      if (Array.isArray(raw)) {
+        servers = raw as Object[];
+      }
+    } catch (e) {
+      return;
+    }
+    if (servers === null) {
+      return;
+    }
+    let index = 0;
+    for (const s of servers) {
+      const m = s as Record<string, Object>;
+      diagnostics.inputCount = diagnostics.inputCount + 1;
+      const node = new ProxyNode();
+      node.id = `${subscriptionId}-sip008-${index++}`;
+      node.subscriptionId = subscriptionId;
+      node.type = ProxyNodeType.SS;
+      node.method = String(m['method'] ?? '');
+      node.password = String(m['password'] ?? '');
+      node.server = String(m['server'] ?? '');
+      const portRaw = m['server_port'];
+      node.port = typeof portRaw === 'number' ? portRaw : parseInt(String(portRaw ?? ''));
+      const remarks = String(m['remarks'] ?? '');
+      node.name = remarks.length > 0 ? remarks : node.server;
+      node.rawUri = '';
+      if (SsrCodec.validate(node)) {
+        add(node);
+      } else {
+        add(null);
+      }
+    }
   }
 
   /** 节点重名规整（对应 subscription_parser_naming_part）：重名追加序号 */

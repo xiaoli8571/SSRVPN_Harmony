@@ -122,8 +122,12 @@ export class LatencyRecord {
  *  - CANCELLED / UNTESTED 不带结论，权重排在失败之后。
  */
 export class LatencyPolicy {
-  /** 5000ms 是 mihomo 内部默认（NewHealthCheck 的兜底）；移动端不再更低。 */
-  static readonly DEFAULT_TIMEOUT_MS: number = 5000;
+  /**
+   * 4000ms（用户指定）：真机健康节点最高实测 ~522ms，7.7 倍余量；主流客户端
+   * 范围（clash-linux 3000 / mihomo NewHealthCheck 5000 / CFW 8000）内取紧值，
+   * 单节点结论从 5s 提前到 4s。
+   */
+  static readonly DEFAULT_TIMEOUT_MS: number = 4000;
   /** mihomo 的 timeout 用 16 位整数解析，> 32767 直接 400。 */
   static readonly MAX_TIMEOUT_MS: number = 30000;
   /** 结果视为"旧"的阈值：超过即灰显，提示用户可能不准 */

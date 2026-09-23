@@ -9,6 +9,7 @@
  * （api 是构造参数，天然可注入；其余是模块级单例，用桩模块替换）：
  *   - ClashApiService 桩：可编程的 testLatencyDetailed（按节点名返回结果/抛错/延迟）
  *   - ConnectionOrchestrator 桩：记录 scheduleTestCoreRecycle 调用 + refreshLatencyEndpoint
+ *     + rebuildTestCoreForLatency（404 自愈重建：桩数调用次数、结果可编程）
  *   - AppLogger 桩：吞日志
  *   - DirectLatencyTester 桩：离线通道
  *   - LatencyState / LatencyController / ProxyNode：用真实实现（也是真跑的一部分）
@@ -184,16 +185,20 @@ export class DirectLatencyTester {
 }
 `);
 
-// 桩：ConnectionOrchestrator（记录回收/自愈调用）
+// 桩：ConnectionOrchestrator（记录回收/自愈/重建调用）
 w('ConnectionOrchestrator.ts', `
 export class ConnectionOrchestrator {
   static recycles = [];
   static recoverCalls = 0;
   static recoverResult = true;
+  static rebuildCalls = 0;
+  static rebuildResult = true;
   static reset() {
     ConnectionOrchestrator.recycles = [];
     ConnectionOrchestrator.recoverCalls = 0;
     ConnectionOrchestrator.recoverResult = true;
+    ConnectionOrchestrator.rebuildCalls = 0;
+    ConnectionOrchestrator.rebuildResult = true;
   }
   static _inst = null;
   static instance() {
@@ -206,6 +211,10 @@ export class ConnectionOrchestrator {
   async refreshLatencyEndpoint(_api) {
     ConnectionOrchestrator.recoverCalls++;
     return ConnectionOrchestrator.recoverResult;
+  }
+  async rebuildTestCoreForLatency() {
+    ConnectionOrchestrator.rebuildCalls++;
+    return ConnectionOrchestrator.rebuildResult;
   }
 }
 `);
@@ -233,7 +242,108 @@ const { ConnectionOrchestrator } = await import(pathToFileURL(path.join(stage, '
 const { ProxyNode } = await import(pathToFileURL(path.join(stage, 'ProxyNode.ts')).href);
 const { DirectLatencyTester } = await import(pathToFileURL(path.join(stage, 'DirectLatencyTester.ts')).href);
 
-const URL_ = 'https://www.gstatic.com/generate_204';
+const URL_ = 'http://www.gstatic.com/generate_204';
+
+// ── 配置指纹：从真实源码抽取纯函数后真跑 ────────────────────────────────────
+// fingerprintLatencyInput / djb2Hex 不依赖任何 kit（纯字符串运算），按本套件
+// 既有惯例（桩常量必须从真实源码抽取）整体抽取，行为断言跑在真函数上。
+const orchSrc = fs.readFileSync(path.join(svc, 'ConnectionOrchestrator.ets'), 'utf8');
+// 注意：源码是 CRLF 换行，正则必须容忍 \r
+const fpM = orchSrc.match(/static fingerprintLatencyInput\(subs: SubscriptionService, settings: AppSettings\): string \{([\s\S]*?)\r?\n  \}\r?\n/);
+ok(fpM, 'fingerprintLatencyInput must be extractable from real source');
+const djM = orchSrc.match(/private static djb2Hex\(s: string\): string \{([\s\S]*?)\r?\n  \}\r?\n/);
+ok(djM, 'djb2Hex must be extractable from real source');
+w('LatencyFingerprint.ts', `
+export function fingerprintLatencyInput(subs, settings) {${fpM[1].replace(/ConnectionOrchestrator\.djb2Hex/g, 'djb2Hex')}
+}
+export function djb2Hex(s) {${djM[1]}
+}
+`);
+const { fingerprintLatencyInput } =
+  await import(pathToFileURL(path.join(stage, 'LatencyFingerprint.ts')).href);
+
+function fpSubs(nodeList, subList, groupList) {
+  return { nodes: nodeList, subscriptions: subList, proxyGroups: groupList };
+}
+function fpNode(subId, name, server = '1.2.3.4', port = 443, protocol = 'vless') {
+  return { subscriptionId: subId, name, server, port, protocol };
+}
+function fpSettings(over = {}) {
+  return {
+    proxyMode: 'rule', proxyGroupSelections: '', rulesEnabled: true,
+    hyperAdRulesEnabled: true, customRules: [], forceDirectSites: [],
+    forceProxySites: [], useRawProviderConfig: false,
+    testLatencyUrl: 'http://www.gstatic.com/generate_204', theme: 'dark',
+    ...over,
+  };
+}
+function fpBase() {
+  return {
+    subs: fpSubs(
+      [fpNode('s1', 'a'), fpNode('s1', 'b'), fpNode('s2', 'c')],
+      [{ id: 's1', enabled: true }, { id: 's2', enabled: true }],
+      [{ subscriptionId: 's1', name: 'g', groupType: 'select', members: ['a', 'b'],
+         includeAll: false, includeAllProxies: false, filterPattern: '', excludeFilterPattern: '' }]),
+    settings: fpSettings(),
+  };
+}
+
+await checkAsync('指纹：相同输入稳定', async () => {
+  const a = fpBase();
+  const b = fpBase();
+  eq(fingerprintLatencyInput(a.subs, a.settings), fingerprintLatencyInput(b.subs, b.settings),
+    'same input must give same fingerprint');
+});
+await checkAsync('指纹：节点改名/增删漂移', async () => {
+  const a = fpBase();
+  const renamed = fpBase();
+  renamed.subs.nodes[0] = fpNode('s1', 'a2');
+  ok(fingerprintLatencyInput(a.subs, a.settings) !== fingerprintLatencyInput(renamed.subs, renamed.settings),
+    'rename must drift');
+  const added = fpBase();
+  added.subs.nodes.push(fpNode('s2', 'd'));
+  ok(fingerprintLatencyInput(a.subs, a.settings) !== fingerprintLatencyInput(added.subs, added.settings),
+    'import must drift');
+});
+await checkAsync('指纹：接入点变更漂移（同名换 server/port/protocol）', async () => {
+  const a = fpBase();
+  for (const mod of [
+    (n) => ({ ...n, server: '5.6.7.8' }),
+    (n) => ({ ...n, port: 8443 }),
+    (n) => ({ ...n, protocol: 'trojan' }),
+  ]) {
+    const b = fpBase();
+    b.subs.nodes[1] = mod(b.subs.nodes[1]);
+    ok(fingerprintLatencyInput(a.subs, a.settings) !== fingerprintLatencyInput(b.subs, b.settings),
+      'endpoint edit must drift (stale config would dial the old server)');
+  }
+});
+await checkAsync('指纹：订阅开关/组成员变更漂移', async () => {
+  const a = fpBase();
+  const disabled = fpBase();
+  disabled.subs.subscriptions[1] = { id: 's2', enabled: false };
+  ok(fingerprintLatencyInput(a.subs, a.settings) !== fingerprintLatencyInput(disabled.subs, disabled.settings),
+    'disable must drift');
+  const regrouped = fpBase();
+  regrouped.subs.proxyGroups[0] = { ...regrouped.subs.proxyGroups[0], members: ['a'] };
+  ok(fingerprintLatencyInput(a.subs, a.settings) !== fingerprintLatencyInput(regrouped.subs, regrouped.settings),
+    'group edit must drift');
+});
+await checkAsync('指纹：生效设置变更漂移，无关字段不漂移', async () => {
+  const a = fpBase();
+  const modeChanged = fpBase();
+  modeChanged.settings = fpSettings({ proxyMode: 'global' });
+  ok(fingerprintLatencyInput(a.subs, a.settings) !== fingerprintLatencyInput(modeChanged.subs, modeChanged.settings),
+    'proxyMode must drift (generator emits a different mode line)');
+  const rulesChanged = fpBase();
+  rulesChanged.settings = fpSettings({ customRules: ['DOMAIN,example.com,REJECT'] });
+  ok(fingerprintLatencyInput(a.subs, a.settings) !== fingerprintLatencyInput(rulesChanged.subs, rulesChanged.settings),
+    'customRules must drift');
+  const irrelevant = fpBase();
+  irrelevant.settings = fpSettings({ testLatencyUrl: 'https://www.gstatic.com/generate_204', theme: 'light' });
+  eq(fingerprintLatencyInput(a.subs, a.settings), fingerprintLatencyInput(irrelevant.subs, irrelevant.settings),
+    'test url / theme must NOT drift (no rebuild storm on unrelated edits)');
+});
 function nodes(n) {
   const out = [];
   for (let i = 0; i < n; i++) out.push(new ProxyNode('node-' + i, '1.2.3.' + (i % 250 + 1)));
@@ -277,7 +387,7 @@ await checkAsync('并发严格不超过 LATENCY_CONCURRENCY（真跑 worker 池�
 });
 
 // ── 2. 每个探测都带 URL 与 timeout（契约：timeout 必传且 <=32767） ─────────
-await checkAsync('每个探测都显式带 HTTPS url 与合法 timeout', async () => {
+await checkAsync('每个探测都显式带 http url 与合法 timeout', async () => {
   fresh();
   ClashApiService.handler = async () => probeResult(50);
   const run = LatencyEngine.start(new ClashApiService(), nodes(6), URL_, opts({ timeoutMs: 5000 }));
@@ -285,7 +395,8 @@ await checkAsync('每个探测都显式带 HTTPS url 与合法 timeout', async (
   LatencyEngine.release(run);
   for (const c of ClashApiService.calls) {
     eq(c.url, URL_, 'url passed through');
-    ok(c.url.startsWith('https://'), 'must be https (unified-delay + hijacking proxies)');
+    ok(c.url.startsWith('http://'),
+      'must be http (mainstream client default; avoids per-probe TLS handshake through the node)');
     ok(c.timeoutMs > 0 && c.timeoutMs <= 32767, `timeout ${c.timeoutMs} must be 1..32767`);
   }
 });
@@ -330,24 +441,52 @@ await checkAsync('内核回 200 但 delay==0（失败语义）不得记为有效
 });
 
 // ── 5. 通道故障绝不写成节点失败 + 整批作废 ────────────────────────────────
-await checkAsync('内核不可用：连续命中后作废整批，且绝不盖章成节点失败', async () => {
+await checkAsync('内核不可用：连续命中后作废整批，绝不盖章成节点失败', async () => {
   fresh();
-  ConnectionOrchestrator.recoverResult = false; // 自愈失败 -> 应作废
+  ConnectionOrchestrator.recoverResult = false; // re-issue 失败
+  ConnectionOrchestrator.rebuildResult = false; // 内核重建也被拒/失败 -> 应作废
   ClashApiService.handler = async () => probeResult(-1, LatencyFailKind.CORE_NOT_READY, 0);
   const run = LatencyEngine.start(new ClashApiService(), nodes(30), URL_, opts());
   const p = await run.run();
   LatencyEngine.release(run);
   eq(p.coreUnavailable, true, 'batch must be flagged unavailable');
   eq(p.failed, 0, 'a dead core must NOT produce node failures');
-  eq(p.timeout, 0, 'nor timeouts');
-  // 没有节点被写成失败/超时
+  ok(p.timeout > 0, `untested nodes stamped TIMEOUT per product decision (${p.timeout})`);
+  // 不盖章成 FAILED（通道问题不冒充节点失败）；TIMEOUT 是终局兜底
   for (let i = 0; i < 30; i++) {
-    const st = LatencyController.stateFor('node-' + i);
-    ok(st !== LatencyState.FAILED && st !== LatencyState.TIMEOUT,
-      `node-${i} must not be stamped failed/timeout (got ${st})`);
+    ok(LatencyController.stateFor('node-' + i) !== LatencyState.FAILED,
+      `node-${i} must not be stamped FAILED`);
   }
-  ok(p.finished < 30, `batch should abort early (finished=${p.finished})`);
-  ok(ConnectionOrchestrator.recoverCalls <= 1, 'recovery attempted at most once per batch');
+  eq(p.finished, p.total, 'progress converges after final stamp');
+  ok(ConnectionOrchestrator.recoverCalls <= 3, `re-issue bounded per batch (${ConnectionOrchestrator.recoverCalls})`);
+  ok(ConnectionOrchestrator.rebuildCalls >= 1 && ConnectionOrchestrator.rebuildCalls <= 2,
+    `dead core rebuild bounded (${ConnectionOrchestrator.rebuildCalls})`);
+});
+
+// ── 内核真死：re-issue 失败后 rebuild 成功，批次继续跑完 ───────────────────
+await checkAsync('内核真死：rebuild 成功后批次继续跑完（不整批作废）', async () => {
+  fresh();
+  ConnectionOrchestrator.recoverResult = false; // re-issue 失败 = 内核真死
+  ConnectionOrchestrator.rebuildResult = true;  // rebuild 把死内核拉起来
+  let n = 0;
+  ClashApiService.handler = async () => {
+    n++;
+    // 前 6 次（触发阈值）内核死透（连接失败），rebuild 后恢复
+    return n <= 6 ? probeResult(-1, LatencyFailKind.CORE_NOT_READY, 0) : probeResult(88);
+  };
+  const run = LatencyEngine.start(new ClashApiService(), nodes(20), URL_, opts());
+  const p = await run.run();
+  LatencyEngine.release(run);
+  // 前 6 个节点在内核死透期间被消耗（保持未测）→ 终局兜底波把它们**重测出真实值**
+  // （handler 已恢复），rebuild 后剩余 14 个也全部实测 —— 20 个全 measured
+  eq(p.measured, 20, 'final sweep re-probes dead-period nodes to real values');
+  eq(p.coreUnavailable, false, 'batch must NOT be flagged unavailable');
+  eq(p.failed, 0, 'no false failures');
+  eq(p.timeout, 0, 'no timeouts (all nodes got real values)');
+  eq(p.finished, p.total, 'progress exact');
+  eq(LatencyController.stateFor('node-0'), LatencyState.MEASURED, 'dead-period node re-measured');
+  eq(LatencyController.stateFor('node-10'), LatencyState.MEASURED, 'post-rebuild node measured');
+  eq(ConnectionOrchestrator.rebuildCalls, 1, 'exactly one rebuild');
 });
 
 // ── 6. 通道自愈成功则继续跑完 ─────────────────────────────────────────────
@@ -357,8 +496,8 @@ await checkAsync('中途失联但自愈成功：批次继续跑完', async () =>
   let n = 0;
   ClashApiService.handler = async () => {
     n++;
-    // 前 3 次（触发阈值）通道故障，之后恢复
-    return n <= 3 ? probeResult(-1, LatencyFailKind.CORE_NOT_READY, 0) : probeResult(77);
+    // 前 6 次（触发 CORE_NOT_READY_ABORT_STREAK=6 阈值）通道故障，之后恢复
+    return n <= 6 ? probeResult(-1, LatencyFailKind.CORE_NOT_READY, 0) : probeResult(77);
   };
   const run = LatencyEngine.start(new ClashApiService(), nodes(12), URL_, opts());
   const p = await run.run();
@@ -387,22 +526,20 @@ await checkAsync('取消：不产生节点结论、不留 TESTING，被打断的
   const p = await started;
   LatencyEngine.release(run);
 
-  ok(p.finished < 40, `cancel must stop the batch (finished=${p.finished})`);
+  ok(p.finished === p.total, `final stamp converges progress (finished=${p.finished})`);
   let testing = 0;
   let failedCount = 0;
-  let timeoutCount = 0;
   let untested = 0;
   for (let i = 0; i < 40; i++) {
     const st = LatencyController.stateFor('node-' + i);
     if (st === LatencyState.TESTING) testing++;
     if (st === LatencyState.FAILED) failedCount++;
-    if (st === LatencyState.TIMEOUT) timeoutCount++;
     if (st === LatencyState.UNTESTED) untested++;
   }
   eq(testing, 0, 'no node may be left TESTING after cancel (the forever-spinner bug)');
   eq(failedCount, 0, 'cancel must never produce node failures');
-  eq(timeoutCount, 0, 'cancel must never produce timeouts');
-  ok(untested > 0, `interrupted nodes must read as untested "--" (got ${untested})`);
+  ok(p.timeout > 0, `interrupted nodes stamped TIMEOUT (no untested left, got timeout=${p.timeout})`);
+  eq(untested, 0, 'no untested left (product decision: timeout or latency only)');
   ok(p.cancelled > 0, `interrupted probes must be counted (got ${p.cancelled})`);
   ok(ClashApiService.cancelled > 0, 'cancelInflight must be called to free http handles');
   eq(p.coreUnavailable, false,
@@ -424,12 +561,16 @@ await checkAsync('新批次抢占旧批次：旧批次作废且不留 TESTING', 
   const r1 = await p1;
   LatencyEngine.release(second);
   eq(p2.measured, 5, 'second batch completes');
-  ok(r1.finished < 30, 'first batch must be aborted by preemption');
+  eq(r1.finished, 30, 'first batch converges after final stamp');
   let testing = 0;
+  let untested = 0;
   for (let i = 0; i < 30; i++) {
-    if (LatencyController.stateFor('node-' + i) === LatencyState.TESTING) testing++;
+    const st = LatencyController.stateFor('node-' + i);
+    if (st === LatencyState.TESTING) testing++;
+    if (st === LatencyState.UNTESTED) untested++;
   }
   eq(testing, 0, 'preemption must not leave TESTING behind');
+  eq(untested, 0, 'preempted nodes stamped TIMEOUT (no untested left)');
 });
 
 // ── 9. force=false 只补缺失/过期 ──────────────────────────────────────────
@@ -567,9 +708,9 @@ await checkAsync('探测直接抛异常：只影响该节点，整批照常跑�
   const st1 = LatencyController.stateFor('node-1');
   ok(st1 !== LatencyState.FAILED,
     `a thrown transport error must not become a node FAILED verdict (got ${st1})`);
-  eq(st1, LatencyState.UNTESTED, 'the throwing node stays untested');
-  eq(p.measured, 4, 'the other four nodes still get measured');
-  eq(p.finished, 5, 'progress must still reach total (otherwise the bar hangs)');
+  // 终局兜底：抛异常的节点被盖 TIMEOUT（不留未测），其余 4 个实测
+  eq(st1, LatencyState.TIMEOUT, 'the throwing node stamped TIMEOUT (no untested left)');
+  eq(p.measured, 4, 'other nodes measured normally');
 });
 
 // ── 14. 进度确定性 ────────────────────────────────────────────────────────
@@ -596,7 +737,7 @@ await checkAsync('进度确定性：finished 单调不减且最终等于 total',
 // ── 15. 硬截止：剩余保持未测而不是失败 ────────────────────────────────────
 // 确定性做法：单次探测耗时 × 节点数 / 并发 必然超过整批截止，从而必然触达 deadline。
 // 用 (BATCH_DEADLINE_MS * 并发 / 节点数) 量级的单次耗时，保证剩余节点跑不完。
-await checkAsync('硬截止后剩余节点保持未测（绝不写成失败）', async () => {
+await checkAsync('硬截止后剩余节点盖超时（不留未测，产品决策）', async () => {
   fresh();
   const total = 60;
   // 每个探测 ~ (deadline / (total/concurrency) ) * 2 → 必然用时超过 deadline
@@ -609,16 +750,17 @@ await checkAsync('硬截止后剩余节点保持未测（绝不写成失败）',
   const p = await run.run();
   LatencyEngine.release(run);
   eq(p.failed, 0, 'deadline must not produce failures');
-  eq(p.timeout, 0, 'deadline must not produce timeouts');
+  ok(p.timeout > 0, `remaining nodes must be stamped TIMEOUT (timeout=${p.timeout})`);
   let testing = 0;
+  let untested = 0;
   for (let i = 0; i < total; i++) {
-    if (LatencyController.stateFor('node-' + i) === LatencyState.TESTING) testing++;
+    const st = LatencyController.stateFor('node-' + i);
+    if (st === LatencyState.TESTING) testing++;
+    if (st === LatencyState.UNTESTED) untested++;
   }
   eq(testing, 0, 'deadline must not leave TESTING');
-  ok(p.measured < total,
-    `deadline should leave nodes untested (measured=${p.measured}/${total}, perProbe=${perProbeMs}ms)`);
-  // 剩余节点既不是失败也不是超时 —— 就是"没测"
-  eq(p.finished, p.measured, 'finished counts only the ones that actually settled');
+  eq(untested, 0, 'no untested left (product decision: timeout or latency only)');
+  eq(p.finished, p.total, 'progress converges to total after final stamp');
 });
 
 // ── 16. release 语义 ──────────────────────────────────────────────────────
@@ -633,6 +775,53 @@ await checkAsync('release 之后引擎不再认为自己在跑', async () => {
   ok(!LatencyEngine.isRunning(), 'released engine is not running');
   ok(LatencyEngine.currentProgress() === null || LatencyEngine.currentProgress() !== null,
     'currentProgress must not throw after release');
+});
+
+// ── 404 自愈：配置过期 → 重建一次 → 重试出数 ────────────────────────────────
+await checkAsync('404-on-CORE：重建成功后重试出实测（只重建一次，不重复计进度）', async () => {
+  fresh();
+  ConnectionOrchestrator.rebuildResult = true;
+  ClashApiService.handler = async (name) => {
+    // 重建前内核配置里没有这些名字（过期快照）→ 404；重建后配置新鲜 → 出数
+    if (ConnectionOrchestrator.rebuildCalls > 0) return probeResult(120);
+    return probeResult(-1, LatencyFailKind.SWITCH_FAILED, 404);
+  };
+  const run = LatencyEngine.start(new ClashApiService(), nodes(3), URL_, opts());
+  const p = await run.run();
+  LatencyEngine.release(run);
+  eq(p.measured, 3, 'all retried to measured');
+  eq(p.failed, 0, 'no false failure stamped');
+  eq(p.finished, p.total, 'progress exact (retry wave must not double count)');
+  eq(p.stale404, 3, 'stale counter');
+  eq(ConnectionOrchestrator.rebuildCalls, 1, 'exactly one rebuild per batch');
+  eq(ClashApiService.calls.length, 6, 'each node probed twice (first strike + retry)');
+  eq(LatencyController.stateFor('node-0'), LatencyState.MEASURED, 'measured verdict');
+});
+await checkAsync('404-on-CORE：重建被拒 → 终局盖章 TIMEOUT（不留未测）', async () => {
+  fresh();
+  ConnectionOrchestrator.rebuildResult = false; // 如隧道权威时门禁拒绝
+  ClashApiService.handler = async () => probeResult(-1, LatencyFailKind.SWITCH_FAILED, 404);
+  const run = LatencyEngine.start(new ClashApiService(), nodes(2), URL_, opts());
+  const p = await run.run();
+  LatencyEngine.release(run);
+  eq(p.measured, 0, 'nothing measured');
+  eq(p.failed, 2, '404 after failed rebuild = real deletion (FAILED verdict, not untested)');
+  eq(p.timeout, 0, 'nothing stamped TIMEOUT');
+  eq(p.finished, p.total, 'progress still converges');
+  eq(LatencyController.stateFor('node-0'), LatencyState.FAILED, 'FAILED verdict (real deletion)');
+  eq(LatencyController.stateFor('node-1'), LatencyState.FAILED, 'FAILED verdict (real deletion)');
+});
+await checkAsync('404-on-CORE：重建后还 404 才是真删除（记失败，且只重建一次）', async () => {
+  fresh();
+  ConnectionOrchestrator.rebuildResult = true;
+  ClashApiService.handler = async () => probeResult(-1, LatencyFailKind.SWITCH_FAILED, 404);
+  const run = LatencyEngine.start(new ClashApiService(), nodes(2), URL_, opts());
+  const p = await run.run();
+  LatencyEngine.release(run);
+  eq(p.failed, 2, 'second-strike 404 is a real verdict');
+  eq(ConnectionOrchestrator.rebuildCalls, 1, 'still exactly one rebuild');
+  eq(p.finished, p.total, 'progress exact');
+  eq(LatencyController.stateFor('node-0'), LatencyState.FAILED, 'failed verdict');
 });
 
 fs.rmSync(stage, { recursive: true, force: true });

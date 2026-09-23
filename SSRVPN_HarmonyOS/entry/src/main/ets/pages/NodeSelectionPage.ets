@@ -283,10 +283,20 @@ struct NodeSelectionPage {
       LatencyController.addListener(this.latencyListener);
       this.latencyListenerBound = true;
     }
-    // 进页面自动补测：只补「没有新鲜结果」的节点（force=false，引擎按 FRESH_RESULT_MS
-    // 跳过并计入 progress.skipped）。不 await、不弹 toast —— 它只驱动顶栏进度条，
-    // 绝不允许拖住首屏；全部新鲜时它几乎立刻结束，也不会弹任何「无需重新测速」的提示。
-    this.autoTestMissing();
+    // 进页面自动补测（**条件化**，用户要求）：只有 a) 软件完全退出再进入（进程
+    // 首次进页面）或 b) 订阅刚导入/刷新过，才自动补测；普通页面切换/返回不测。
+    // 进程级状态存 SubscriptionService 单例（页面实例销毁重建不影响）。
+    const needCold = !this.subs.autoTestColdDone;
+    const needAfterImport = this.subs.mutateEpoch > this.subs.autoTestConsumedEpoch;
+    if (needCold || needAfterImport) {
+      if (needCold) {
+        this.subs.autoTestColdDone = true;
+      }
+      this.subs.autoTestConsumedEpoch = this.subs.mutateEpoch;
+      // force=false，只补「没有新鲜结果」的节点。不 await、不弹 toast —— 它只驱动
+      // 顶栏进度条，绝不允许拖住首屏。
+      this.autoTestMissing();
+    }
   }
 
   /**
@@ -342,8 +352,9 @@ struct NodeSelectionPage {
         for (const node of members.nodes) {
           memberNodes.push(this.mkNodeRow(node));
         }
-        groupRows.push({ group: group, nodes: groupNodes,
-          memberNodes: memberNodes, strategyGroups: members.groups.slice() });
+      groupRows.push({ group: group, nodes:
+        this.applySortOrder(groupNodes),
+        memberNodes: this.applySortOrder(memberNodes), strategyGroups: members.groups.slice() });
       }
     }
     this.groupRows = groupRows;
@@ -352,33 +363,44 @@ struct NodeSelectionPage {
       validGroupKeys.add(row.group.subscriptionId + '\u0000' + row.group.name);
     }
     this.expandedGroupKeys = this.expandedGroupKeys.filter((key: string) => validGroupKeys.has(key));
-    // 排序：按持久化的测速快照恢复顺序（auto/manual），无数据则保持订阅原始顺序
-    if (this.sortMode !== NodeSortModes.DEFAULT) {
-      const snap = this.sortSnapshot;
-      if (snap !== null) {
-        const names: string[] = [];
-        for (const r of rows) {
-          names.push(r.node.name);
-        }
-        const order = snap.orderedNames(names);
-        if (order.length > 0) {
-          const byName = new Map<string, NodeRow>();
-          for (const r of rows) {
-            byName.set(r.node.name, r);
-          }
-          const reordered: NodeRow[] = [];
-          for (const name of order) {
-            const r = byName.get(name);
-            if (r !== undefined) {
-              reordered.push(r);
-            }
-          }
-          this.nodes = reordered;
-          return;
-        }
+    // 排序：按持久化的测速快照恢复顺序（auto/manual），无数据则保持订阅原始顺序。
+    // 订阅分组（groupRows）内的节点/成员同样走 applySortOrder —— 之前只有主列表
+    // 排序、分组内保持订阅声明顺序，用户看到"分组里不按延迟排"。
+    this.nodes = this.applySortOrder(rows);
+  }
+
+  /**
+   * 按持久化测速快照排序（auto=延迟升序失败沉底 / manual=手动顺序）。
+   * 主列表与订阅分组共用；DEFAULT 模式或无快照时原样返回（订阅声明顺序）。
+   */
+  private applySortOrder(rows: NodeRow[]): NodeRow[] {
+    if (this.sortMode === NodeSortModes.DEFAULT) {
+      return rows;
+    }
+    const snap = this.sortSnapshot;
+    if (snap === null) {
+      return rows;
+    }
+    const names: string[] = [];
+    for (const r of rows) {
+      names.push(r.node.name);
+    }
+    const order = snap.orderedNames(names);
+    if (order.length === 0) {
+      return rows;
+    }
+    const byName = new Map<string, NodeRow>();
+    for (const r of rows) {
+      byName.set(r.node.name, r);
+    }
+    const reordered: NodeRow[] = [];
+    for (const name of order) {
+      const r = byName.get(name);
+      if (r !== undefined) {
+        reordered.push(r);
       }
     }
-    this.nodes = rows;
+    return reordered;
   }
 
   /**
@@ -639,19 +661,19 @@ struct NodeSelectionPage {
   /**
    * 本批使用的测速 URL。
    *
-   * 尊重用户在设置里的 `testLatencyUrl`（旧实现也是这么做的，只是同时挂着 3 个
-   * fallback 和整批级降级机制 —— 那套机制已删除，因为主流客户端**没有一个**做 URL
-   * 轮换，失败通常意味着节点本身不通，而不是 URL 被针对）。
-   * 但**强制 HTTPS**：`unified-delay` 开启时 mihomo 会发两次 HEAD，官方明确警告
-   * `http://` 这类 URL 在劫持型代理下会失败；用户若填了 http 就回落到默认 HTTPS。
+   * 尊重用户在设置里的 `testLatencyUrl`（http 与 https 均接受）—— 主流客户端没有
+   * 一个强制改写用户配置的测速 URL；此前"非 https 一律回落"的覆盖逻辑已删除，
+   * 它把 CFW/CMFA/v2rayN 等同款的 `http://www.gstatic.com/generate_204` 出厂默认
+   * 拦截成 HTTPS，而过节点的 TLS 握手挂起正是"正常节点测出 504 超时"的主因。
+   * 仅当配置为空或不是 http(s) 地址时回落到引擎默认。
    */
   private testUrlForLatency(): string {
     const configured: string = this.settings.testLatencyUrl.trim();
-    if (configured.startsWith('https://')) {
+    if (configured.startsWith('http://') || configured.startsWith('https://')) {
       return configured;
     }
     if (configured.length > 0) {
-      AppLogger.warn(TAG, `test url "${configured}" is not https; falling back to ${LATENCY_TEST_URL}`);
+      AppLogger.warn(TAG, `test url "${configured}" is not http(s); falling back to ${LATENCY_TEST_URL}`);
     }
     return LATENCY_TEST_URL;
   }

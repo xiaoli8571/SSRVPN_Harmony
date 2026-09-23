@@ -48,10 +48,14 @@ import { ProxyNode } from '../models/ProxyNode';
 import { DirectLatencyTester } from './DirectLatencyTester';
 
 const TAG = 'LatencyEngine';
+/** 并发探测数。内核侧并发无上限保护，客户端必须自律。
+ *  取 30（用户指定）：24/32 并发"批次死"后被证明是**误判 abort**（订阅节点成串
+ *  不通 + mihomo 刚启动的初始化窗口连续 7 个 core_not_ready）而非并发导致——
+ *  16 并发同样死，且 24 并发批次成功跑完 137 节点（23.8s）。30 并发 137 节点
+ *  全批约 24s。 */
+export const LATENCY_CONCURRENCY = 30;
 
-/** 并发探测数。内核侧并发无上限保护，客户端必须自律（主流取值 5~16）。 */
-export const LATENCY_CONCURRENCY = 8;
-/** 单节点探测超时（mihomo 内部默认 5000ms）。 */
+/** 单节点探测超时（4000ms，见 LatencyPolicy；真机健康节点 ≤522ms，余量 7.7 倍）。 */
 export const LATENCY_TIMEOUT_MS = LatencyPolicy.DEFAULT_TIMEOUT_MS;
 /** 首批请求错峰抖动上限，避免整批同时撞内核（Clash Verge Rev 同款做法）。 */
 const STAGGER_MAX_MS = 200;
@@ -62,7 +66,11 @@ const STAGGER_MAX_MS = 200;
  */
 export const BATCH_DEADLINE_MS = 90000;
 /** 连续「通道不可用」达到该次数即中止本批（内核不在/凭证错配，整批结论无效）。 */
-const CORE_NOT_READY_ABORT_STREAK = 3;
+/** 通道失联作废整批的连续命中阈值。
+ *  真机 17:05 现场：streak=4 就作废整批，而 8 秒后通道自愈恢复 —— 高并发下
+ *  单点抖动的比例更高，3 次太敏感。取 6：既给通道抖动留出恢复窗口
+ *  （tryRecoverChannel 每批最多一次），又能在内核真死时及时止损。 */
+const CORE_NOT_READY_ABORT_STREAK = 6;
 /** `force=false` 时，多久以内的实测结果视为新鲜、可跳过重测。 */
 export const FRESH_RESULT_MS = 5 * 60 * 1000;
 /**
@@ -71,9 +79,25 @@ export const FRESH_RESULT_MS = 5 * 60 * 1000;
  */
 export const LATENCY_CORE_IDLE_MS = 90000;
 
-/** 统一用 HTTPS：unified-delay 开启时 http:// URL 在劫持型代理下会失败（mihomo 官方警告）。 */
-export const LATENCY_TEST_URL = 'https://www.gstatic.com/generate_204';
-export const LATENCY_TEST_URL_ALT = 'https://cp.cloudflare.com/generate_204';
+/**
+ * 默认测速 URL：**http** 的 generate_204 —— 对齐主流 Clash 客户端的出厂默认
+ * （CFW `cfw-latency-url`、ClashMetaForAndroid、v2rayN、clash-linux 脚本均是
+ * `http://www.gstatic.com/generate_204`），也与本仓 `tools/true-chain-harness/*`
+ * 真机探针的 URL 取值一致（探针 timeout=8000 仅其观测口径；应用侧预算见
+ * LatencyPolicy.DEFAULT_TIMEOUT_MS=4000）。
+ *
+ * 为什么弃用此前的强制 HTTPS（用户反馈"正常节点测出超时"的主因）：
+ *  - 内核 `(*Proxy).URLTest` 对 https URL 要**过节点**做一次 TLS 握手，`unified-delay`
+ *    下还发两次 HEAD；受限出口（TLS 分片/SNI 干扰/回国节点）上握手会挂起直到
+ *    context 预算耗尽 → `getProxyDelay` 回 504 → UI 把好节点标成"超时"。
+ *  - http 的 generate_204 是极小的 1-RTT 交换、无 TLS，同一条健康节点上更少失败面、
+ *    也更快（每次探测省掉一次完整握手）。
+ *  - 当初改 HTTPS 依据的 mihomo 官方警告（"unified-delay + http 在劫持型代理下
+ *    会失败"）在捆绑内核里是**非致命**的：`adapter/adapter.go` 对第二次 HEAD 失败
+ *    只打日志并回退用第一次响应，测试不会因此失败。
+ */
+export const LATENCY_TEST_URL = 'http://www.gstatic.com/generate_204';
+export const LATENCY_TEST_URL_ALT = 'http://cp.cloudflare.com/generate_204';
 
 /** 进度快照（UI 直接绑定） */
 export class LatencyProgress {
@@ -87,6 +111,8 @@ export class LatencyProgress {
   skipped: number = 0;
   /** 通道不可用（内核/凭证层面）的连续命中总数 */
   coreNotReady: number = 0;
+  /** 本批命中的 404（内核代理表无此名）：配置过期嫌疑，先重试后定论 */
+  stale404: number = 0;
   /** 整批因通道不可用而中止：此时**不能**把结果当节点结论 */
   coreUnavailable: boolean = false;
   /** 本批实际使用的通道：LatencyChannel.CORE / OFFLINE */
@@ -115,7 +141,8 @@ export class LatencyRunOptions {
  */
 export class LatencyRun {
   private readonly api: ClashApiService | null;
-  private readonly nodes: ProxyNode[];
+  /** 重试波要换队列（readonly 会拦住换队列；构造后只在 run() 内部切换）。 */
+  private nodes: ProxyNode[];
   private readonly url: string;
   private readonly timeoutMs: number;
   private readonly force: boolean;
@@ -129,7 +156,15 @@ export class LatencyRun {
   private coreNotReadyStreak: number = 0;
   /** 本批是否已尝试过"重新解析通道凭证"（每批最多一次） */
   private channelRecoveryTried: boolean = false;
+  /** 本批"死内核重建"次数（限 2 次：re-issue 便宜可多次，rebuild 有成本） */
+  private channelRebuildCount: number = 0;
   private cursor: number = 0;
+  /** 404-on-CORE 的待重测节点（配置过期嫌疑）：收齐后重建一次内核再测一轮 */
+  private staleQueue: ProxyNode[] = [];
+  /** 本批是否已做过"过期配置重建+重试"（每批最多一次） */
+  private staleRetryDone: boolean = false;
+  /** 进度计数开关：重试波不再重复计 finished（首波已计过），避免 finished > total */
+  private countProgress: boolean = true;
 
   constructor(api: ClashApiService | null, nodes: ProxyNode[], url: string, timeoutMs: number,
     force: boolean, onResult: LatencyResultSink | null, onProgress: LatencyProgressSink | null) {
@@ -215,6 +250,120 @@ export class LatencyRun {
       + `concurrency=${LATENCY_CONCURRENCY} timeout=${this.timeoutMs}ms force=${this.force} `
       + `channel=${this.progress.channel} url=${this.url}`);
 
+    await this.runLanes(generation, deadlineAt);
+
+    // 404 自愈波：本批在 CORE 通道遇到"代理不存在"，可能是配置在批次启动后
+    // 过期（订阅增删改恰好落在本批中间）。重建一次内核并重测这些节点；
+    // 重建后还 404 才是真删除，走正常 FAILED。重建失败/超时/取消 → 保持未测。
+    if (this.staleQueue.length > 0 && !this.staleRetryDone && this.api !== null
+      && this.progress.channel === LatencyChannel.CORE
+      && !this.isAborted(generation) && Date.now() < deadlineAt) {
+      this.staleRetryDone = true;
+      const retryNodes = this.staleQueue;
+      this.staleQueue = [];
+      AppLogger.warn(TAG,
+        `latency stale-config retry: rebuilding test core for ${retryNodes.length} node(s)`);
+      let rebuilt = false;
+      try {
+        rebuilt = await ConnectionOrchestrator.instance().rebuildTestCoreForLatency();
+      } catch (e) {
+        AppLogger.warn(TAG, `latency stale-config rebuild threw: ${AppLogger.errText(e)}`);
+      }
+      if (rebuilt && !this.isAborted(generation) && Date.now() < deadlineAt) {
+        const savedNodes = this.nodes;
+        const savedCursor = this.cursor;
+        this.nodes = retryNodes;
+        this.cursor = 0;
+        this.countProgress = false;
+        try {
+          await this.runLanes(generation, deadlineAt);
+        } finally {
+          this.nodes = savedNodes;
+          this.cursor = savedCursor;
+          this.countProgress = true;
+        }
+      } else {
+        AppLogger.warn(TAG,
+          'latency stale-config retry skipped: rebuild failed or batch aborted/expired');
+      }
+    }
+
+    // ── 兜底波：批次结束时不允许留下「未测」──
+    // 用户要求"要么显示超时要么显示延迟，没有其他选项"。仍为 UNTESTED 的节点
+    // （deadline 用尽 / 自愈期间被消耗 / 环回跳过）先在剩余 deadline 内补测一轮
+    // （能测出真实值最好）；补测后仍 UNTESTED 的盖章为「超时」—— 与主流客户端
+    // 一致（CMFA/Verge 对没测完的节点显示 timeout）。
+    // 例外：用户主动取消 / 通道不可用（coreUnavailable，banner 已解释）→ 保持未测。
+    if (!this.isAborted(generation) && this.api !== null && !this.progress.coreUnavailable
+      && Date.now() < deadlineAt) {
+      const pending: ProxyNode[] = [];
+      for (const node of this.nodes) {
+        if (LatencyController.stateFor(node.name) === LatencyState.UNTESTED) {
+          pending.push(node);
+        }
+      }
+      if (pending.length > 0) {
+        AppLogger.info(TAG, `latency final sweep: re-probing ${pending.length} untested node(s)`);
+        const savedNodes = this.nodes;
+        const savedCursor = this.cursor;
+        this.nodes = pending;
+        this.cursor = 0;
+        this.countProgress = false;
+        try {
+          await this.runLanes(generation, deadlineAt);
+        } finally {
+          this.nodes = savedNodes;
+          this.cursor = savedCursor;
+          this.countProgress = true;
+        }
+      }
+    }
+    // 终局盖章：**所有收尾路径**（含通道不可用 / 用户取消 / 新批次抢占）后，
+    // 本批仍 UNTESTED 的节点一律盖章为「超时」—— 产品决策：节点状态要么超时
+    // 要么延迟，不允许留「未测」（重进后才显示超时的旧观感已消除）。
+    // 盖章循环是同步的且逐个检查 `stateFor === UNTESTED`：新批次已 markTesting
+    // （TESTING）的节点不会被盖，无竞态。
+    let stamped = 0;
+    for (const node of this.nodes) {
+      if (LatencyController.stateFor(node.name) === LatencyState.UNTESTED) {
+        LatencyController.setRecord(
+          LatencyRecord.failed(node.name, LatencyState.TIMEOUT, Date.now(),
+            this.progress.channel === LatencyChannel.OFFLINE
+              ? LatencyChannel.OFFLINE : LatencyChannel.CORE));
+        this.progress.timeout = this.progress.timeout + 1;
+        stamped = stamped + 1;
+      }
+    }
+    if (stamped > 0) {
+      // 所有节点都有结论了，进度收敛到 total（否则进度条不到 100% 就结束）
+      this.progress.finished = this.progress.total;
+      AppLogger.warn(TAG, `latency final stamp: ${stamped} node(s) still untested after `
+        + `sweep -> TIMEOUT (no untested left per product decision)`);
+      LatencyController.notify();
+    }
+
+    this.finished = true;
+    this.progress.running = false;
+    this.emitProgress();
+    AppLogger.info(TAG, `latency batch done nodes=${this.nodes.length} channel=${this.progress.channel} `
+      + `measured=${this.progress.measured} timeout=${this.progress.timeout} failed=${this.progress.failed} `
+      + `cancelled=${this.progress.cancelled} skipped=${this.progress.skipped} `
+      + `stale404=${this.progress.stale404} notReady=${this.progress.coreNotReady} `
+      + `unavailable=${this.progress.coreUnavailable} `
+      + `elapsed=${Date.now() - startedAt}ms`);
+    // 内核回收归引擎管：批次结束后挂一个**宽限**回收（而不是立刻停）。测速内核重建
+    // 要经历 DoH + 停旧扩展 + 600ms 等待 + 启新扩展 + 健康轮询（秒级），用户来回切
+    // 页面/连点测速时应复用同一内核；宽限期内再次测速会 cancel 掉这个定时器。
+    // 仅内核通道才需要回收：离线通道没有内核可回收；已连接时该方法内部会因
+    // orchestrator busy 直接返回，绝不动用户正在用的 VPN（见 scheduleTestCoreRecycle）。
+    if (this.api !== null) {
+      ConnectionOrchestrator.instance().scheduleTestCoreRecycle(LATENCY_CORE_IDLE_MS);
+    }
+    return this.progress;
+  }
+
+  /** 跑一轮 lane（首波与 404 重试波共用；重试波不再重复计 finished） */
+  private async runLanes(generation: number, deadlineAt: number): Promise<void> {
     const lanes = Math.min(LATENCY_CONCURRENCY, Math.max(1, this.nodes.length));
     const workers: Promise<void>[] = [];
     for (let w = 0; w < lanes; w++) {
@@ -229,24 +378,6 @@ export class LatencyRun {
     } finally {
       this.clearOwnTestingMarks();
     }
-
-    this.finished = true;
-    this.progress.running = false;
-    this.emitProgress();
-    AppLogger.info(TAG, `latency batch done nodes=${this.nodes.length} channel=${this.progress.channel} `
-      + `measured=${this.progress.measured} timeout=${this.progress.timeout} failed=${this.progress.failed} `
-      + `cancelled=${this.progress.cancelled} skipped=${this.progress.skipped} `
-      + `notReady=${this.progress.coreNotReady} unavailable=${this.progress.coreUnavailable} `
-      + `elapsed=${Date.now() - startedAt}ms`);
-    // 内核回收归引擎管：批次结束后挂一个**宽限**回收（而不是立刻停）。测速内核重建
-    // 要经历 DoH + 停旧扩展 + 600ms 等待 + 启新扩展 + 健康轮询（秒级），用户来回切
-    // 页面/连点测速时应复用同一内核；宽限期内再次测速会 cancel 掉这个定时器。
-    // 仅内核通道才需要回收：离线通道没有内核可回收；已连接时该方法内部会因
-    // orchestrator busy 直接返回，绝不动用户正在用的 VPN（见 scheduleTestCoreRecycle）。
-    if (this.api !== null) {
-      ConnectionOrchestrator.instance().scheduleTestCoreRecycle(LATENCY_CORE_IDLE_MS);
-    }
-    return this.progress;
   }
 
   /** 领取下一个待测节点下标（单线程事件循环，无需锁） */
@@ -316,8 +447,11 @@ export class LatencyRun {
       } catch (e) {
         AppLogger.warn(TAG, `latency probe threw for one node; keeping it untested: `
           + `${AppLogger.errText(e)}`);
-        // 不落任何结论（保持未测），但必须计入进度，否则进度条永远到不了 total
-        this.progress.finished = this.progress.finished + 1;
+        // 不落任何结论（保持未测），但首波必须计入进度，否则进度条永远到不了 total；
+        // 重试波不再重复计（首波已计过），避免 finished > total。
+        if (this.countProgress) {
+          this.progress.finished = this.progress.finished + 1;
+        }
         this.emitProgress();
         continue;
       }
@@ -326,12 +460,18 @@ export class LatencyRun {
       }
       if (!outcome.publishable) {
         // 通道不可用：不是节点结论 → 保持「未测」，并在连续命中后中止整批
-        this.progress.finished = this.progress.finished + 1;
+        // （重试波不再重复计 finished，首波已计过）
+        if (this.countProgress) {
+          this.progress.finished = this.progress.finished + 1;
+        }
         this.emitProgress();
         continue;
       }
       this.publish(node.name, outcome.record);
-      this.progress.finished = this.progress.finished + 1;
+      // 重试波不再重复计 finished（首波已计过），避免 finished > total
+      if (this.countProgress) {
+        this.progress.finished = this.progress.finished + 1;
+      }
       this.emitProgress();
     }
   }
@@ -346,13 +486,9 @@ export class LatencyRun {
    * 内核真死时把时间浪费在反复读盘上。
    */
   private async tryRecoverChannel(): Promise<void> {
-    if (this.channelRecoveryTried) {
-      return;
-    }
     if (this.coreNotReadyStreak < CORE_NOT_READY_ABORT_STREAK) {
       return;
     }
-    this.channelRecoveryTried = true;
     const api = this.api;
     if (api === null) {
       return;
@@ -362,8 +498,25 @@ export class LatencyRun {
       if (recovered) {
         AppLogger.info(TAG, 'latency channel recovered: endpoint secret re-resolved');
         this.coreNotReadyStreak = 0;
+        return;
+      }
+      // re-issue 仍失败 = 内核**真死**（真机 17:22 现场：reachable=false，连接都
+      // 建不了；:vpn 扩展被系统杀）。只 re-issue secret 救不回来，必须把
+      // 死内核**重建拉起**（停后起，真机实测重建仅 ~126ms）—— 批次才能继续
+      // 跑完剩余节点，而不是整批作废、下一批又从死内核开始。
+      // 每批限 2 次（真机 17:35 现场：一次自愈后二次死亡无救 → 整批作废）。
+      if (this.channelRebuildCount >= 2) {
+        AppLogger.warn(TAG, 'latency channel recovery: rebuild limit reached');
+        return;
+      }
+      this.channelRebuildCount = this.channelRebuildCount + 1;
+      AppLogger.warn(TAG, 'latency channel recovery: secret re-issue failed; rebuilding dead core');
+      const rebuilt = await ConnectionOrchestrator.instance().rebuildTestCoreForLatency();
+      if (rebuilt) {
+        AppLogger.info(TAG, 'latency channel recovered: dead core rebuilt');
+        this.coreNotReadyStreak = 0;
       } else {
-        AppLogger.warn(TAG, 'latency channel recovery failed: core still unusable');
+        AppLogger.warn(TAG, 'latency channel recovery failed: core rebuild refused/failed');
       }
     } catch (e) {
       AppLogger.warn(TAG, `latency channel recovery error: ${AppLogger.errText(e)}`);
@@ -409,11 +562,22 @@ export class LatencyRun {
       // 此时**作废整批**：剩余节点保持「未测」，页面提示"内核不可用，本轮未测"。
       // 绝不把通道故障写进任何节点的结论里 —— 这是旧实现"内核一抖半张列表变红"的根因。
       if (this.coreNotReadyStreak >= CORE_NOT_READY_ABORT_STREAK) {
-        this.progress.coreUnavailable = true;
-        AppLogger.warn(TAG, `latency batch aborted: core/channel unavailable `
-          + `streak=${this.coreNotReadyStreak} measured=${this.progress.measured} `
-          + `recoveryTried=${this.channelRecoveryTried}`);
-        this.invalidate();
+        // **比例门槛**：通道真死时 measured 应该很低；订阅里节点成串不通（NexPanel
+        // 真机现场：137 节点 110 个成功、13 个连续 notReady）时比例极低 —— 不该
+        // 作废整批，自愈后继续跑。只有"失败占多数"才认定通道死。
+        if (this.progress.coreNotReady > this.progress.measured) {
+          this.progress.coreUnavailable = true;
+          AppLogger.warn(TAG, `latency batch aborted: core/channel unavailable `
+            + `streak=${this.coreNotReadyStreak} measured=${this.progress.measured} `
+            + `notReady=${this.progress.coreNotReady} rebuilds=${this.channelRebuildCount}`);
+          this.invalidate();
+        } else {
+          // 连续失败但成功占多数：通道活着，重置 streak 继续测（下一个节点
+          // 若再失败会重新累计，但不会把好批次作废）
+          AppLogger.warn(TAG, `latency core_not_ready streak=${this.coreNotReadyStreak} `
+            + `but measured=${this.progress.measured} dominates; channel alive, continuing`);
+          this.coreNotReadyStreak = 0;
+        }
       }
       return ProbeOutcome.notPublishable();
     }
@@ -424,6 +588,17 @@ export class LatencyRun {
         LatencyRecord.measured(node.name, probe.delayMs, LatencyChannel.CORE, Date.now()));
     }
     const state = LatencyEngine.mapFailure(probe.failKind, probe.httpCode);
+    if (state === LatencyState.FAILED && probe.httpCode === 404
+      && this.progress.channel === LatencyChannel.CORE && !this.staleRetryDone) {
+      // 404 = 内核代理表里没有这个名字。配置可能刚过期（订阅增删改恰好落在
+      // 本批启动之后）—— 此时盖章成节点「失败」是撒谎：先收进重试队列，收齐后
+      // 重建一次内核再测一轮；重建后还 404 才是真删除，走正常 FAILED。
+      this.staleQueue.push(node);
+      this.progress.stale404 = this.progress.stale404 + 1;
+      AppLogger.warn(TAG, `latency 404 on possibly-stale config; `
+        + `queued for post-rebuild retry (queued=${this.staleQueue.length})`);
+      return ProbeOutcome.notPublishable();
+    }
     if (state === LatencyState.TIMEOUT) {
       this.progress.timeout = this.progress.timeout + 1;
     } else {
@@ -514,6 +689,7 @@ export class LatencyEngine {
    * 严格区分三件事：
    *  - TIMEOUT：内核按预算判定超时（504）
    *  - FAILED：拨号失败 / 状态码不符 / delay==0（503）、节点已不存在（404）
+   *    （404 在 CORE 通道首轮先进 staleQueue 自愈重试，重建后还 404 才定论）
    *  - CANCELLED：客户端主动中止
    */
   static mapFailure(failKind: string, httpCode: number): number {
