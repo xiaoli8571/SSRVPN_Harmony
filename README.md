@@ -1,4 +1,5 @@
 # SSRVPN for HarmonyOS（鸿蒙 NEXT）
+# 本项目后续不再更新，为了保证上架港区商店已更换UI和包名，请移步另外一个项目，谢谢。https://github.com/xiaoli8571/Nexus-VPN-HarmonyOS
 
 将 [SSRVPN](https://github.com/Elegying/SSRVPN)（Android 上的 Clash/Mihomo 客户端）完整移植到
 **HarmonyOS NEXT（纯鸿蒙 ArkTS）**。
